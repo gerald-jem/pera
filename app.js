@@ -230,7 +230,7 @@ function renderMonths(ser) {
     <span class="t"><b>${M[p.i]}</b><small><span class="up">+${esc(pesoS(p.inc))}</span> · <span class="dn">−${esc(pesoS(p.exp))}</span> · saved ${esc(pesoS(p.sav))}</small></span>
     <span class="mr">${p.past ? 'Total' : 'Planned'}<b>${esc(peso(p.total))}</b></span></button></li>`).join('')
     || '<li class="empty">No months yet. Tap ＋ Year.</li>';
-  const binN = (S.meta.trash || []).length;
+  const binN = (S.meta.trash || []).length + (S.meta.savings || []).reduce((t, p) => t + (p.trash || []).length, 0);
   $('yearActions').innerHTML = (rows.length ? `<button class="danger" data-act="year-del" data-y="${esc(selYear)}">Delete ${esc(selYear)}</button>` : '')
     + `<button class="plain" data-act="statement">Import a bank statement</button>`
     + (binN ? `<button class="plain" data-act="settings">Recycle bin (${binN})</button>` : '');
@@ -635,7 +635,7 @@ function savingsAct(d) {
       toast(`${fmtDate(c.start, {month: 'short', year: 'numeric'})} cycle deleted`, () => restoreCycle(p, item)); return;
     }
     case 'cyc-restore': { const item = (p.trash || [])[+d.k]; if (item) restoreCycle(p, item); return; }
-    case 'cyc-forever': { const t = p.trash || [], k = +d.k, [item] = t.splice(k, 1); if (!item) return; commit('meta'); toast('Cycle deleted for good', () => { t.splice(k, 0, item); commit('meta'); }); return; }
+    case 'cyc-forever': { const t = p.trash || [], k = +d.k, [item] = t.splice(k, 1), inSettings = !sheetPot; if (!item) return; commit('meta'); if (inSettings) settings(); toast('Cycle deleted for good', () => { t.splice(k, 0, item); commit('meta'); if (inSettings) settings(); }); return; }
     case 'cycle-new': { const st = todayIso(); p.cycles = [{start: st, end: addDays(st, p.cycleDays || 181), rate: p.rate, carry: 0, deposits: []}]; commit('meta'); return potSheet(p.id, 0); }
     case 'cycle-next': {
       const last = p.cycles[p.cycles.length - 1], c = tdCycle(p, last), st = c.end;
@@ -918,13 +918,18 @@ function purgeTrash() {
   if (keep.length !== t.length) { S.meta.trash = keep; dirty.add('meta'); saveLocal(); }
 }
 function binHTML() {
-  const t = S.meta.trash || [];
-  if (!t.length) return '<p class="muted">Empty. Deleted years stay here for ' + TRASH_DAYS + ' days.</p>';
+  const t = S.meta.trash || [], left = at => Math.max(0, Math.ceil((Date.parse(at) + TRASH_DAYS * 864e5 - Date.now()) / 864e5));
+  const cyc = (S.meta.savings || []).flatMap(p => (p.trash || []).map((x, i) => ({p, x, i})));
+  if (!t.length && !cyc.length) return '<p class="muted">Empty. Deleted years and savings cycles stay here for ' + TRASH_DAYS + ' days.</p>';
+  const days = at => `${left(at)} day${left(at) === 1 ? '' : 's'} left`;
   return '<ul class="list">' + t.map(x => {
     const n = x.months.reduce((a, m) => a + m.inc.length + m.exp.length, 0);
-    const left = Math.max(0, Math.ceil((Date.parse(x.at) + TRASH_DAYS * 864e5 - Date.now()) / 864e5));
-    return `<li><span class="rowbtn" style="cursor:default"><span class="dot s">${esc(x.y.slice(2))}</span><span class="t">${esc(x.y)}<small>${n} entries · deleted ${esc(fmtDate(x.at.slice(0, 10)))} · ${left} day${left === 1 ? '' : 's'} left</small></span></span>
+    return `<li><span class="rowbtn" style="cursor:default"><span class="dot s">${esc(x.y.slice(2))}</span><span class="t">Year ${esc(x.y)}<small>${n} entries · deleted ${esc(fmtDate(x.at.slice(0, 10)))} · ${days(x.at)}</small></span></span>
       <button class="ghost" data-act="bin-restore" data-y="${esc(x.y)}">Restore</button><button class="x" data-act="bin-forever" data-y="${esc(x.y)}" aria-label="Delete ${esc(x.y)} forever">×</button></li>`;
+  }).join('') + cyc.map(({p, x, i}) => {
+    const c = tdCycle(p, x.cycle);
+    return `<li><span class="rowbtn" style="cursor:default"><span class="dot s">₱</span><span class="t">${esc(p.name)} · ${esc(fmtDate(x.cycle.start, {month: 'short', year: 'numeric'}))} cycle<small>${esc(peso(c.closing))} at maturity · ${days(x.at)}</small></span></span>
+      <button class="ghost" data-act="cyc-restore" data-p="${esc(p.id)}" data-k="${i}">Restore</button><button class="x" data-act="cyc-forever" data-p="${esc(p.id)}" data-k="${i}" aria-label="Delete cycle for good">×</button></li>`;
   }).join('') + '</ul>';
 }
 function restoreYear(y, quiet) {
