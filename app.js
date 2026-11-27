@@ -42,7 +42,7 @@ const billsIn = (y, i) => (S.meta.bills || []).map((b, j) => ({...b, j})).filter
 /* ================= state ================= */
 const cfg = window.PERA_CONFIG || {};
 const sb = (cfg.supabaseUrl && cfg.supabaseAnonKey && window.supabase)
-  ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {auth: {persistSession: true, autoRefreshToken: true}})
+  ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {auth: {persistSession: true, autoRefreshToken: true, lock: async (_name, _wait, fn) => await fn()}})
   : null;
 
 let user = null;          // supabase user
@@ -69,7 +69,8 @@ function loadLocal() {
   base = store.get(kBase()) || {};
 }
 /* ---- three-way merge: keep what this device changed, take everything else from the server ---- */
-const J = x => JSON.stringify(x === undefined ? null : x);
+// stable JSON (keys sorted) so the same data always compares equal, whatever order its fields were written in
+const J = x => JSON.stringify(x === undefined ? null : x, (k, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o, key) => (o[key] = v[key], o), {}) : v);
 function pick(b, l, r, hasBase) {
   // changed here since the last sync → ours; otherwise the server's (fall back to ours if the server has nothing)
   if (hasBase && J(l) !== J(b)) return l;
@@ -145,7 +146,8 @@ function commit(...keys) { keys.forEach(k => dirty.add(k)); saveLocal(); render(
 /* ================= sync ================= */
 async function pull() {
   if (!sb || !user) return false;
-  const {data, error} = await sb.from('pera_docs').select('key,data');
+  let data, error;
+  try { ({data, error} = await within(sb.from('pera_docs').select('key,data'), 'downloading')); } catch (e) { error = e; }
   if (error) { await syncFailed(error); return false; }
   const remote = new Map(data.map(r => [r.key, r.data]));
   // keep a safety copy before the server's version replaces anything on this device
@@ -162,15 +164,20 @@ async function pull() {
   saveLocal(); render();
   return true;
 }
+// every server call gets a time limit, so a stuck request is reported and retried instead of hanging forever
+const SYNC_MS = 20000;
+const within = (p, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej({message: `The server didn’t answer in ${SYNC_MS / 1000} seconds (${what}). Will retry.`, timeout: true}), SYNC_MS))]);
+let pushStart = 0, lastSynced = store.get('pera:lastSynced') || 0;
 async function push() {
+  if (pushing && Date.now() - pushStart > SYNC_MS * 3) pushing = false;   // watchdog
   if (!sb || !user || pushing) return;
   if (!dirty.size) { setSync('idle'); return; }
-  pushing = true; setSync('saving');
+  pushing = true; pushStart = Date.now(); setSync('saving');
   try {
     for (let round = 0; dirty.size && round < 5; round++) {
       const keys = [...dirty];
       // 1. read what the server has now
-      const {data, error} = await sb.from('pera_docs').select('key,data').in('key', keys);
+      const {data, error} = await within(sb.from('pera_docs').select('key,data').in('key', keys), 'reading');
       if (error) throw error;
       const remote = new Map(data.map(r => [r.key, r.data]));
       // 2. merge with this device's changes (no awaits here, so nothing can change in between)
@@ -186,8 +193,8 @@ async function push() {
       if (rows.length) S.meta.years = Object.keys(S.years).sort();
       saveLocal(); render();
       // 3. upload the merged result
-      if (gone.length) { const {error: e2} = await sb.from('pera_docs').delete().eq('user_id', user.id).in('key', gone); if (e2) throw e2; }
-      if (rows.length) { const {error: e3} = await sb.from('pera_docs').upsert(rows, {onConflict: 'user_id,key'}); if (e3) throw e3; }
+      if (gone.length) { const {error: e2} = await within(sb.from('pera_docs').delete().eq('user_id', user.id).in('key', gone), 'deleting'); if (e2) throw e2; }
+      if (rows.length) { const {error: e3} = await within(sb.from('pera_docs').upsert(rows, {onConflict: 'user_id,key'}), 'uploading'); if (e3) throw e3; }
       // 4. done for keys that didn't change again while uploading
       for (const k of keys) {
         if (gone.includes(k)) { if (!S.years[k.slice(1)]) { dirty.delete(k); delete base[k]; } continue; }
@@ -197,7 +204,8 @@ async function push() {
       }
       saveLocal();
     }
-    setSync(dirty.size ? 'error' : 'idle');
+    if (dirty.size) throw {message: `Uploaded, but ${[...dirty].join(', ')} kept changing. Will retry.`};
+    setSync('idle');
   } catch (e) {
     pushing = false; await syncFailed(e);
   } finally { pushing = false; }
@@ -207,7 +215,7 @@ const isAuthErr = e => e && (e.status === 401 || e.code === 'PGRST301' || e.code
 async function syncFailed(e) {
   console.warn('sync failed', e);
   if (!navigator.onLine) { syncErr = null; setSync('offline'); return; }
-  syncErr = {msg: (e && (e.message || e.error_description || e.code)) || String(e), at: Date.now(), auth: isAuthErr(e)};
+  syncErr = {msg: (e && (e.message || e.error_description || e.code)) || (e && JSON.stringify(e)) || String(e), at: Date.now(), auth: isAuthErr(e)};
   if (syncErr.auth && sb) {   // the sign-in expired: try to renew it once
     const {error} = await sb.auth.refreshSession().catch(x => ({error: x}));
     if (!error) { syncErr = null; setSync('saving'); setTimeout(() => push(), 300); return; }
@@ -220,7 +228,7 @@ function setSync(s) {
   el.className = 'sync ' + (s === 'idle' ? 'ok' : 'wait');
   $('syncTxt').textContent = s === 'idle' ? 'Synced' : s === 'saving' ? 'Saving…'
     : s === 'offline' ? `Offline · ${n} change${n === 1 ? '' : 's'} waiting` : s === 'auth' ? 'Sign in again to sync' : 'Not synced · tap for details';
-  if (s === 'idle') syncErr = null;
+  if (s === 'idle') { syncErr = null; lastSynced = Date.now(); store.set('pera:lastSynced', lastSynced); }
 }
 addEventListener('online', () => push());
 document.addEventListener('visibilitychange', () => { if (!document.hidden && user) { pull().then(() => push()); } });
@@ -1630,7 +1638,8 @@ function settings() {
   openSheet(`<div class="sheethead"><h2>Settings</h2><button type="button" class="ghost" data-act="close">Done</button></div>
     <p class="muted">Signed in as <b style="color:var(--ink)">${esc(user && user.email)}</b></p>
     <div class="note">${syncState === 'idle' ? 'Everything is synced.' : `${n} change${n === 1 ? '' : 's'} saved on this phone, waiting to upload.`}
-      ${syncErr ? `<br><span class="dn">${syncErr.auth ? 'Your sign-in expired. Sign out and back in; nothing on this phone is lost.' : 'The server said: ' + esc(syncErr.msg)}</span>` : ''}</div>
+      ${syncErr ? `<br><span class="dn">${syncErr.auth ? 'Your sign-in expired. Sign out and back in; nothing on this phone is lost.' : esc(syncErr.msg)}</span>` : pushing ? `<br><span class="muted">Uploading now (${Math.round((Date.now() - pushStart) / 1000)}s)…</span>` : ''}
+      ${lastSynced ? `<br><span class="muted">Last synced ${esc(new Date(lastSynced).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}))}</span>` : ''}</div>
     ${syncErr && syncErr.auth ? '<button class="go" data-act="signout">Sign in again</button>' : ''}
     <button class="go" data-act="sync-now">Sync now</button>
     <h2>App lock</h2>
