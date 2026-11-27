@@ -1197,8 +1197,12 @@ const CATS = [
   ['Transfers', /sent to|transfer to|instapay|pesonet|send money|sent money|fund transfer/],
 ];
 const CAT_NAMES = [...CATS.map(c => c[0]), 'Other'];
-const CAT_COL = {'Travel': '#0ea5e9', 'Food & drinks': '#f97316', 'Groceries': '#22c55e', 'Bills & PayLater': '#ef4444', 'Utilities & load': '#eab308', 'Subscriptions & games': '#a855f7', 'Transport': '#14b8a6', 'Shopping': '#ec4899', 'Health': '#06b6d4', 'Fees & taxes': '#78716c', 'Cash withdrawals': '#84cc16', 'Transfers': '#6366f1', 'Other': '#94a3b8', 'No description': '#64748b'};
-const catCol = c => CAT_COL[c] || '#94a3b8';
+// the 7 categories that get their own colour, in the palette's slot order (checked for colour-blind separation);
+// everything else shares the neutral "Other"
+const CAT_SLOTS = ['Bills & PayLater', 'Food & drinks', 'Groceries', 'Utilities & load', 'Shopping', 'Transport', 'Subscriptions & games'];
+const slotOf = c => CAT_SLOTS.indexOf(c);
+const catCol = c => slotOf(c) >= 0 ? `var(--s${slotOf(c) + 1})` : c === 'No description' ? 'var(--s-none)' : 'var(--s-other)';
+const catGroup = c => slotOf(c) >= 0 ? c : c === 'No description' ? 'No description' : 'Other';
 // your own choices win: meta.catRules = {merchant: category}
 const catOf = (n, bill) => {
   if (!n) return 'No description';
@@ -1292,6 +1296,7 @@ function renderInsights(ser) {
   const rate = (inc, exp) => inc > 0 ? Math.round((inc - exp) / inc * 100) : null;
 
   box.innerHTML = `<div class="inshead"><h2>Insights</h2><div class="seg insseg">${[['month', 'This month'], ['3m', '3 months'], ['year', 'This year'], ['lastyear', 'Last year']].map(([k, l]) => `<button data-act="ins-p" data-k="${k}" aria-pressed="${k === insP}">${l}</button>`).join('')}</div></div>
+  <div class="reports">${REPORTS.map(([k, l, ic]) => `<button class="repbtn" data-act="report" data-r="${k}"><span class="repic" aria-hidden="true">${ic}</span>${l}</button>`).join('')}</div>
   <div class="insgrid">
     <section class="card inscard"><div class="inshead"><h3>Where your money goes</h3><button class="chip trchip" data-act="ins-tr" aria-pressed="${insTr}">${insTr ? '✓ ' : ''}Include transfers</button></div>
       <p class="muted">${esc(peso(total))} spent in ${pLabel}${!insTr && moved ? ` · ${esc(peso(moved))} moved between accounts, not counted` : ''}</p>
@@ -1317,6 +1322,122 @@ function renderInsights(ser) {
           ${topM ? `<li>Top merchant: <b>${esc(topM[0])}</b> (${esc(peso(topM[1]))})</li>` : ''}
         </ul>${+insYear === t.getFullYear() ? '<p class="muted">So far this year.</p>' : ''}` : '<p class="empty">No months recorded yet for this year.</p>'}</section>
   </div>`;
+}
+
+/* ================= more reports (each in its own sheet) ================= */
+const REPORTS = [['trend', 'Spending trend', '▥'], ['cal', 'Spending calendar', '▦'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '⏷']];
+let repState = {months: 6, cal: null};
+const lastMonths = n => { const t = today(), out = []; for (let k = n - 1; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); if (S.years[d.getFullYear()]) out.push({y: String(d.getFullYear()), i: d.getMonth()}); } return out; };
+const niceUp = v => { if (v <= 0) return 1; const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e; };
+const gridY = (W, H, pl, pr, pt, pb, hi, fmt, lo = 0) => [0, 0.5, 1].map(f => { const v = lo + (hi - lo) * f, y = pt + (1 - f) * (H - pt - pb); return `<line x1="${pl}" x2="${W - pr}" y1="${y}" y2="${y}" stroke="var(--line)"${f ? ' stroke-dasharray="2 4"' : ''}/><text x="${pl - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--mute)">${fmt(v)}</text>`; }).join('');
+function legendHTML(items) { return `<div class="legend2">${items.map(([l, c]) => `<span><i style="background:${c}"></i>${esc(l)}</span>`).join('')}</div>`; }
+function reportSheet(r) {
+  const head = t => `<div class="sheethead"><h2>${t}</h2><button type="button" class="ghost" data-act="close">Done</button></div>`;
+  let html = '', draw = null;
+  if (r === 'trend') {
+    const ms = lastMonths(repState.months), rows = ms.map(m => { const by = {}; spendingIn([m]).forEach(x => { if (x.cat === 'Transfers' && !insTr) return; const g = catGroup(x.cat); by[g] = (by[g] || 0) + x.a; }); return {...m, by, tot: Object.values(by).reduce((s, v) => s + v, 0)}; });
+    const groups = [...CAT_SLOTS, 'Other', 'No description'].filter(g => rows.some(x => x.by[g] > 0));
+    const avg = rows.length ? rows.reduce((s, x) => s + x.tot, 0) / rows.length : 0, top = groups.map(g => [g, rows.reduce((s, x) => s + (x.by[g] || 0), 0)]).sort((a, b) => b[1] - a[1])[0];
+    html = head('Spending trend') + `<div class="seg repseg">${[6, 12].map(n => `<button data-act="rep-months" data-n="${n}" aria-pressed="${repState.months === n}">${n} months</button>`).join('')}</div>
+      <p class="muted">Average ${esc(peso(avg))} a month${top ? ` · biggest: ${esc(top[0])}` : ''}${insTr ? '' : ' · transfers between your accounts left out'}. Tap a bar for details.</p>
+      ${legendHTML(groups.map(g => [g, catCol(g)]))}<div class="rfig"><svg id="repSvg" role="img" aria-label="Spending by month, stacked by category"></svg><div class="tip" id="repTip" hidden></div></div>
+      <details class="rtable"><summary>Show as table</summary><div class="tscroll"><table class="ytable"><thead><tr><th>Month</th>${groups.map(g => `<th>${esc(g)}</th>`).join('')}<th>Total</th></tr></thead><tbody>${rows.map(x => `<tr><td>${M[x.i].slice(0, 3)} ${x.y.slice(2)}</td>${groups.map(g => `<td>${esc(pesoS(x.by[g] || 0))}</td>`).join('')}<td><b>${esc(pesoS(x.tot))}</b></td></tr>`).join('')}</tbody></table></div></details>`;
+    draw = svg => {
+      const W = svg.clientWidth, H = svg.clientHeight, pl = 44, pr = 4, pt = 10, pb = 22, hi = niceUp(Math.max(1, ...rows.map(x => x.tot)));
+      const bw = (W - pl - pr) / rows.length, w = Math.min(34, bw * 0.62), Y = v => pt + (1 - v / hi) * (H - pt - pb);
+      svg.innerHTML = gridY(W, H, pl, pr, pt, pb, hi, pesoS) + rows.map((x, k) => {
+        let y0 = H - pb, segs = '';
+        const cx = pl + bw * k + bw / 2, tipTxt = `<b>${M[x.i]} ${x.y}</b>` + groups.filter(g => x.by[g] > 0).map(g => `<div><i style="background:${catCol(g)}"></i>${esc(g)} <span>${esc(peso(x.by[g]))}</span></div>`).join('') + `<div class="tt">Total <span>${esc(peso(x.tot))}</span></div>`;
+        const live = groups.filter(g => x.by[g] > 0);
+        live.forEach((g, gi) => { const h = Math.max(0, (H - pt - pb) * x.by[g] / hi); const y = y0 - h, last = gi === live.length - 1;
+          segs += last ? `<path d="M${cx - w / 2} ${y0}V${y + 4}q0 -4 4 -4h${w - 8}q4 0 4 4V${y0}Z" fill="${catCol(g)}" stroke="var(--sheet)" stroke-width="1"/>` : `<rect x="${cx - w / 2}" y="${y}" width="${w}" height="${h}" fill="${catCol(g)}" stroke="var(--sheet)" stroke-width="1"/>`; y0 = y; });
+        return `<g class="hit" data-tip="${esc(tipTxt)}"><rect x="${pl + bw * k}" y="${pt}" width="${bw}" height="${H - pt - pb}" fill="transparent"/>${segs}</g><text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--mute)">${M[x.i].slice(0, 3)}</text>`;
+      }).join('') + (avg ? `<line x1="${pl}" x2="${W - pr}" y1="${Y(avg)}" y2="${Y(avg)}" stroke="var(--ink)" stroke-dasharray="4 4" opacity=".5"/><text x="${pl + 3}" y="${Y(avg) - 4}" font-size="11" fill="var(--mute)">avg ${esc(pesoS(avg))}</text>` : '');
+    };
+  }
+  if (r === 'cal') {
+    const t = today(), cur = repState.cal || {y: t.getFullYear(), i: t.getMonth()}; repState.cal = cur;
+    const days = new Date(cur.y, cur.i + 1, 0).getDate(), first = new Date(cur.y, cur.i, 1).getDay(), by = Array(days + 1).fill(0), cnt = Array(days + 1).fill(0);
+    const m = S.years[cur.y] && S.years[cur.y][cur.i]; let undated = 0, total = 0;
+    (m ? m.exp : []).forEach(x => { if (!insTr && catOf(x.n) === 'Transfers' && !x.c) return; if (x.c === 'Transfers' && !insTr) return; total += +x.a; const d = x.d && new Date(dnum(x.d)); if (d && d.getMonth() === cur.i && d.getFullYear() === cur.y) { by[d.getDate()] += +x.a; cnt[d.getDate()]++; } else undated += +x.a; });
+    const hi = Math.max(1, ...by), step = v => v <= 0 ? 0 : Math.min(5, 1 + Math.floor(v / hi * 4.999));
+    // weekday pattern over the last 3 months (dated spending only)
+    const wd = Array(7).fill(0), wdn = Array(7).fill(0);
+    lastMonths(3).forEach(mm => { const mo = S.years[mm.y][mm.i], nd = new Date(+mm.y, mm.i + 1, 0).getDate(); for (let dd = 1; dd <= nd; dd++) { const dt = new Date(+mm.y, mm.i, dd); if (dt > t) break; wdn[dt.getDay()]++; } mo.exp.forEach(x => { if ((x.c || catOf(x.n)) === 'Transfers' && !insTr) return; if (!x.d) return; const dt = new Date(dnum(x.d)); wd[dt.getDay()] += +x.a; }); });
+    const wavg = wd.map((v, k) => wdn[k] ? v / wdn[k] : 0), wmax = Math.max(1, ...wavg), best = wavg.indexOf(Math.max(...wavg)), DN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const topDay = by.indexOf(Math.max(...by));
+    html = head('Spending calendar') + `<div class="calnav"><button class="ghost" data-act="cal-mv" data-d="-1" aria-label="Previous month">‹</button><b>${M[cur.i]} ${cur.y}</b><button class="ghost" data-act="cal-mv" data-d="1" aria-label="Next month">›</button></div>
+      <p class="muted">${esc(peso(total))} spent${by[topDay] > 0 ? ` · busiest day: ${M[cur.i].slice(0, 3)} ${topDay} (${esc(peso(by[topDay]))})` : ''}${undated ? ` · ${esc(peso(undated))} has no exact day (bills, old entries)` : ''}. Darker = more spent.</p>
+      <div class="calwrap"><div class="cal">${DN.map(d => `<span class="calh">${d[0]}</span>`).join('')}${'<span></span>'.repeat(first)}${Array.from({length: days}, (_, k) => k + 1).map(d => `<button class="calday s${step(by[d])}" data-tip="${esc(`<b>${M[cur.i].slice(0, 3)} ${d}, ${DN[new Date(cur.y, cur.i, d).getDay()]}</b><div>${by[d] ? esc(peso(by[d])) + ` · ${cnt[d]} payment${cnt[d] === 1 ? '' : 's'}` : 'Nothing spent'}</div>`)}"><span>${d}</span>${by[d] ? `<small>${esc(pesoS(by[d]))}</small>` : ''}</button>`).join('')}</div>
+      <div class="tip" id="repTip" hidden></div></div>
+      <div class="calkey"><span>Less</span>${[0, 1, 2, 3, 4, 5].map(k => `<i class="calday s${k}"></i>`).join('')}<span>More</span></div>
+      <h3>By day of the week</h3><p class="muted">Average spent on each day, last 3 months${wavg[best] > 0 ? ` · most on <b>${['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'][best]}</b>` : ''}.</p>
+      <div class="wdrows">${[1, 2, 3, 4, 5, 6, 0].map(k => `<div class="wdrow"><span>${DN[k]}</span><i><b style="width:${(wavg[k] / wmax * 100).toFixed(1)}%"></b></i><span>${esc(pesoS(wavg[k]))}</span></div>`).join('')}</div>`;
+  }
+  if (r === 'rate') {
+    const rows = lastMonths(12).filter(m => { const t = today(); return +m.y < t.getFullYear() || m.i <= t.getMonth(); }).map(m => { const f = monthFlows(m.y, m.i); return {...m, ...f, r: f.inc > 0 ? (f.inc - f.exp) / f.inc * 100 : null}; }).filter(x => x.r != null);
+    const avg = rows.length ? rows.reduce((s, x) => s + x.r, 0) / rows.length : 0, last = rows[rows.length - 1];
+    html = head('Savings rate') + `<div class="hero2"><b>${last ? Math.round(last.r) + '%' : '—'}</b><span>kept in ${last ? M[last.i] : 'this month'}<br>${Math.round(avg)}% on average over ${rows.length} months</span></div>
+      <p class="muted">The share of your income you didn’t spend (savings deposits count as kept). Below 0% means you spent more than came in. Tap a point for details.</p>
+      <div class="rfig"><svg id="repSvg" role="img" aria-label="Savings rate by month"></svg><div class="tip" id="repTip" hidden></div></div>
+      <details class="rtable"><summary>Show as table</summary><div class="tscroll"><table class="ytable"><thead><tr><th>Month</th><th>Income</th><th>Spent</th><th>Kept</th></tr></thead><tbody>${rows.map(x => `<tr><td>${M[x.i].slice(0, 3)} ${x.y.slice(2)}</td><td>${esc(pesoS(x.inc))}</td><td>${esc(pesoS(x.exp))}</td><td><b class="${x.r < 0 ? 'dn' : ''}">${Math.round(x.r)}%</b></td></tr>`).join('')}</tbody></table></div></details>`;
+    draw = svg => {
+      if (rows.length < 2) { svg.outerHTML = '<p class="empty">Needs at least two months with income.</p>'; return; }
+      const W = svg.clientWidth, H = svg.clientHeight, pl = 40, pr = 10, pt = 12, pb = 22;
+      const lo = Math.floor(Math.min(0, ...rows.map(x => x.r)) / 25) * 25, hi = Math.max(50, Math.ceil(Math.max(...rows.map(x => x.r)) / 25) * 25), stepT = hi - lo > 150 ? 50 : 25;
+      const X = k => pl + k * (W - pl - pr) / (rows.length - 1), Y = v => pt + (hi - v) / (hi - lo) * (H - pt - pb);
+      const line = rows.map((x, k) => (k ? 'L' : 'M') + X(k).toFixed(1) + ' ' + Y(x.r).toFixed(1)).join('');
+      const ticks = []; for (let v = lo; v <= hi + 0.1; v += stepT) ticks.push(v);
+      svg.innerHTML = ticks.map(v => `<line x1="${pl}" x2="${W - pr}" y1="${Y(v)}" y2="${Y(v)}" stroke="${v === 0 ? 'var(--mute)' : 'var(--line)'}"${v === 0 ? '' : ' stroke-dasharray="2 4"'}/><text x="${pl - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="var(--mute)">${v}%</text>`).join('') +
+        `<line x1="${pl}" x2="${W - pr}" y1="${Y(avg)}" y2="${Y(avg)}" stroke="var(--ink)" stroke-dasharray="4 4" opacity=".5"/><text x="${pl + 3}" y="${Y(avg) - 5}" font-size="11" fill="var(--mute)">avg ${Math.round(avg)}%</text>
+        <path d="${line}" fill="none" stroke="var(--blue)" stroke-width="2" stroke-linejoin="round"/>` +
+        rows.map((x, k) => `<g class="hit" data-tip="${esc(`<b>${M[x.i]} ${x.y}</b><div>Kept <span>${Math.round(x.r)}%</span></div><div>Income <span>${esc(peso(x.inc))}</span></div><div>Spent <span>${esc(peso(x.exp))}</span></div>`)}"><rect x="${X(k) - (W / rows.length) / 2}" y="${pt}" width="${W / rows.length}" height="${H - pt - pb}" fill="transparent"/><circle cx="${X(k)}" cy="${Y(x.r)}" r="4" fill="${x.r < 0 ? 'var(--red)' : 'var(--blue)'}" stroke="var(--sheet)" stroke-width="2"/></g>${k % (rows.length > 7 ? 2 : 1) === 0 || k === rows.length - 1 ? `<text x="${X(k)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--mute)">${M[x.i].slice(0, 3)}</text>` : ''}`).join('');
+    };
+  }
+  if (r === 'debt') {
+    const un = (S.meta.bills || []).filter(b => !b.paid && b.due && b.due >= todayIso()), names = uniqNames(un.map(b => b.name)).sort();
+    const nameCol = n => { const k = names.indexOf(n); return k < 7 ? `var(--s${k + 1})` : 'var(--s-other)'; };
+    const t = today(), ms = []; for (let k = 0; k < 12; k++) { const d = new Date(t.getFullYear(), t.getMonth() + k, 1); ms.push({y: String(d.getFullYear()), i: d.getMonth(), by: {}, tot: 0}); }
+    un.forEach(b => { const m = billMonth(b.due), x = ms.find(z => z.y === m.y && z.i === m.i); if (x) { x.by[b.name] = (x.by[b.name] || 0) + +b.a; x.tot += +b.a; } });
+    const total = un.reduce((s, b) => s + +b.a, 0), lastDue = un.map(b => b.due).sort().pop(), per = names.map(n => [n, un.filter(b => sameName(b.name, n)).reduce((s, b) => s + +b.a, 0), un.filter(b => sameName(b.name, n)).map(b => b.due).sort().pop()]);
+    html = head('PayLater payoff') + `<div class="hero2"><b>${esc(peso(total))}</b><span>still to pay${lastDue ? `<br>debt-free after <b>${esc(fmtDate(lastDue, {month: 'long', year: 'numeric'}))}</b>` : ''}</span></div>
+      <p class="muted">Upcoming unpaid bills by the month they count in (paid from that month’s income). Tap a bar for details.</p>
+      ${names.length ? legendHTML(names.map(n => [n, nameCol(n)])) + `<div class="rfig"><svg id="repSvg" role="img" aria-label="Bills to pay each month"></svg><div class="tip" id="repTip" hidden></div></div>
+      <ul class="dlist">${per.map(([n, a, end]) => `<li><span><i style="background:${nameCol(n)}"></i>${esc(n)}<small>done after ${esc(fmtDate(end, {month: 'short', year: 'numeric'}))}</small></span><b>${esc(peso(a, 2))}</b></li>`).join('')}</ul>` : '<p class="empty">No unpaid bills. You’re debt-free.</p>'}`;
+    draw = svg => {
+      const W = svg.clientWidth, H = svg.clientHeight, pl = 44, pr = 4, pt = 10, pb = 22, hi = niceUp(Math.max(1, ...ms.map(x => x.tot)));
+      const bw = (W - pl - pr) / ms.length, w = Math.min(26, bw * 0.62);
+      svg.innerHTML = gridY(W, H, pl, pr, pt, pb, hi, pesoS) + ms.map((x, k) => {
+        let y0 = H - pb, segs = ''; const cx = pl + bw * k + bw / 2, live = names.filter(n => x.by[n] > 0);
+        live.forEach((n, gi) => { const h = (H - pt - pb) * x.by[n] / hi, y = y0 - h, last = gi === live.length - 1;
+          segs += last && h > 4 ? `<path d="M${cx - w / 2} ${y0}V${y + 4}q0 -4 4 -4h${w - 8}q4 0 4 4V${y0}Z" fill="${nameCol(n)}" stroke="var(--sheet)" stroke-width="1"/>` : `<rect x="${cx - w / 2}" y="${y}" width="${w}" height="${h}" fill="${nameCol(n)}" stroke="var(--sheet)" stroke-width="1"/>`; y0 = y; });
+        const tip = `<b>${M[x.i]} ${x.y}</b>` + (live.length ? live.map(n => `<div><i style="background:${nameCol(n)}"></i>${esc(n)} <span>${esc(peso(x.by[n], 2))}</span></div>`).join('') + `<div class="tt">Total <span>${esc(peso(x.tot, 2))}</span></div>` : '<div>No bills</div>');
+        return `<g class="hit" data-tip="${esc(tip)}"><rect x="${pl + bw * k}" y="${pt}" width="${bw}" height="${H - pt - pb}" fill="transparent"/>${segs}</g>${k % 2 === 0 ? `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--mute)">${M[x.i].slice(0, 3)}</text>` : ''}`;
+      }).join('');
+    };
+  }
+  openSheet(html); sheetReport = r;
+  const svg = $('repSvg'); if (svg && draw) requestAnimationFrame(() => draw(svg));
+  bindTips();
+}
+let sheetReport = null;
+function bindTips() {   // tap / hover a mark to see its numbers (delegated, so marks drawn later work too)
+  const body = $('sheetBody'); if (body._tips) return; body._tips = true;
+  const show = el => { const tip = body.querySelector('#repTip'); if (!tip) return; const wrap = tip.parentElement, r = el.getBoundingClientRect(), box = wrap.getBoundingClientRect();
+    tip.innerHTML = el.dataset.tip; tip.hidden = false;
+    const tw = tip.offsetWidth; let x, y;
+    if (el.classList.contains('hit')) {   // chart column: beside it, at the top of the chart, never over the bar
+      const right = r.right - box.left + 6, left = r.left - box.left - tw - 6;
+      x = right + tw <= box.width ? right : left >= 0 ? left : Math.max(4, box.width - tw - 4); y = 4;
+    } else {
+      x = Math.min(Math.max(4, r.left - box.left + r.width / 2 - tw / 2), box.width - tw - 4);
+      y = r.top - box.top - tip.offsetHeight - 8; if (y < 0) y = r.bottom - box.top + 8;
+    }
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    body.querySelectorAll('.hit.on, .calday.on').forEach(z => z.classList.remove('on')); el.classList.add('on'); };
+  const hide = () => { const tip = body.querySelector('#repTip'); if (tip) tip.hidden = true; body.querySelectorAll('.hit.on, .calday.on').forEach(z => z.classList.remove('on')); };
+  body.addEventListener('click', e => { const el = e.target.closest('[data-tip]'); if (el && body.contains(el)) show(el); else hide(); });
+  body.addEventListener('pointerover', e => { if (e.pointerType !== 'mouse') return; const el = e.target.closest('[data-tip]'); if (el) show(el); });
 }
 
 /* ================= sheet + toast ================= */
@@ -2404,6 +2525,9 @@ document.addEventListener('click', e => {
     case 'nudge-cat': insP = 'month'; render(); return catSheet(d.c);
     case 'go-view': showView(d.v); render(); return;
     case 'goal-new': return goalNew();
+    case 'report': return reportSheet(d.r);
+    case 'rep-months': repState.months = +d.n; return reportSheet('trend');
+    case 'cal-mv': { const c = repState.cal; const nd = new Date(c.y, c.i + +d.d, 1); repState.cal = {y: nd.getFullYear(), i: nd.getMonth()}; return reportSheet('cal'); }
     case 'goal-open': return goalSheet(d.g, false);
     case 'goal-edit': return goalSheet(d.g, true);
     case 'goal-del': {
