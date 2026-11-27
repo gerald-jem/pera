@@ -319,3 +319,25 @@ html.applock #mainView,html.applock .tabs,html.applock .sheet,html.applock .toas
   .hcard.hero{grid-area:hero;background:var(--card);padding:20px}#hMonth{grid-area:month}#hBills{grid-area:bills}#hNotes{grid-area:notes}
   .homegrid .fig{height:300px}
 }
+
+/* add form: quick line, shortcuts, categories */
+.quick{margin-bottom:4px}.quick input{font-size:17px}
+.shortcuts{margin-top:8px}.shortcuts:empty{display:none}.shortcuts small{color:var(--mute);margin-left:4px}
+.catchips{flex-wrap:wrap}.catchips .chip{font-size:13px;min-height:34px}
+label small.muted{font-weight:400}
+/* import duplicates */
+.dupnote{display:block;font-size:12px;margin-top:2px}.dupnote.same,.dupnote.likely{color:var(--mute)}.dupnote.maybe{color:var(--red)}
+.dupsum{font-size:14px;margin:6px 0}.dupsum:empty{display:none}
+/* goals */
+.sech{font-size:18px;margin:22px 0 10px}
+.goalcard,.goalempty{text-align:left;display:block;width:100%}
+.goalempty{display:flex;flex-direction:column;gap:6px;border:1px dashed var(--line)}
+.gnum .serif{font-size:26px;font-family:Literata,Georgia,serif;font-weight:600}.gnum.big2 .serif{font-size:32px}
+.gline{font-size:14px;margin-top:6px}
+.gplans{display:grid;gap:8px;margin:14px 0}
+.gplan{background:var(--card);border-radius:14px;padding:12px 14px}.gplan span{display:block;font-size:13px;color:var(--mute)}.gplan b{display:block;font-size:20px;font-family:Literata,Georgia,serif;margin:2px 0}.gplan small{font-size:13px;color:var(--mute)}
+.gtable{width:100%;border-collapse:collapse;font-size:14px;margin:6px 0 8px}.gtable th{text-align:left;font-weight:500;color:var(--mute);font-size:12px;padding:6px 4px;border-bottom:1px solid var(--line)}
+.gtable td{padding:9px 4px;border-bottom:1px solid var(--line);vertical-align:top}.gtable td small{display:block;font-size:11px;color:var(--mute)}.gtable td small.dn{color:var(--red)}
+.gtable tr.ok td{background:color-mix(in srgb,var(--blue) 9%,transparent)}
+.row2{display:flex;gap:8px;margin-top:12px}.row2 .ghost{flex:1}
+.gform{margin-top:16px;border-top:1px solid var(--line);padding-top:8px}

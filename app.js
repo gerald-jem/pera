@@ -94,10 +94,27 @@ function snapshot(reason) {
   store.set(kSnaps(), list.slice(0, 6));
 }
 function docOf(key) { return key === 'meta' ? S.meta : {months: S.years[key.slice(1)]}; }
+// Put a synced copy into place, keeping every object that didn't change.
+// Undo buttons hold on to those objects, so swapping them out would break Undo.
+function patchInto(cur, next) {
+  if (J(cur) === J(next)) return cur;
+  if (Array.isArray(cur) && Array.isArray(next)) {
+    const byId = new Map(cur.filter(x => x && x.id != null).map(x => [x.id, x]));
+    const out = next.map((x, k) => { const old = x && x.id != null ? byId.get(x.id) : cur[k]; return old !== undefined && old !== null && typeof old === 'object' && typeof x === 'object' ? patchInto(old, x) : x; });
+    cur.length = 0; cur.push(...out); return cur;
+  }
+  if (cur && next && typeof cur === 'object' && typeof next === 'object' && !Array.isArray(cur) && !Array.isArray(next)) {
+    for (const k of Object.keys(cur)) if (!(k in next)) delete cur[k];
+    for (const k of Object.keys(next)) cur[k] = cur[k] !== null && typeof cur[k] === 'object' && next[k] !== null && typeof next[k] === 'object' ? patchInto(cur[k], next[k]) : next[k];
+    return cur;
+  }
+  return next;
+}
 function applyDoc(key, data) {
   if (!data) return;
-  if (key === 'meta') S.meta = Object.assign(blank().meta, data);
-  else if (/^y\d{4}$/.test(key) && Array.isArray(data.months)) S.years[key.slice(1)] = data.months;
+  data = JSON.parse(JSON.stringify(data));
+  if (key === 'meta') { const full = Object.assign(blank().meta, data); S.meta = S.meta ? patchInto(S.meta, full) : full; }
+  else if (/^y\d{4}$/.test(key) && Array.isArray(data.months)) { const y = key.slice(1); S.years[y] = S.years[y] ? patchInto(S.years[y], data.months) : data.months; }
 }
 function ensureYear(y) {
   y = String(y);
@@ -618,12 +635,130 @@ function renderSavings() {
   };
   w.innerHTML = `<div class="savtotal"><div class="muted">In savings now</div><div class="big" style="font-size:clamp(34px,10vw,44px)">${esc(peso(total, 2))}</div>
       <p class="muted">Deposits here show as each month’s <b>Saved</b> in Months, but aren’t subtracted from total money — the transfer already shows as money out in your imported statement.</p></div>
+    ${goalsHTML()}
+    <h2 class="sech">Accounts</h2>
     <div class="potgrid">${ps.map(card).join('') || '<p class="empty">No savings yet. Add your Maya time deposit, MP2 or a savings account, or import the Maya file from your spreadsheet in Settings.</p>'}</div>
     <button class="go" data-act="pot-new">Add savings</button>
     ${forecastHTML()}`;
   const fcs = $('fcChart'); if (fcs) { fcRO.disconnect(); fcRO.observe(fcs); drawForecast(); }
 }
 
+/* ---- goals: "I want ₱X — how long, and how much a month?" ---- */
+const goals = () => (S.meta.goals = S.meta.goals || []);
+const netRate = p => p.kind === 'mp2' ? (p.rate || 0) : ((p.kind === 'td' && (p.cycles || []).length ? (p.cycles[p.cycles.length - 1].rate ?? p.rate) : p.rate) || 0) * (1 - (p.tax ?? 0.2));
+function goalSource(g) {
+  if (g.from === 'none') return {have: +g.have || 0, rate: 0, label: 'Money you set aside yourself'};
+  const ps = g.from === 'all' ? pots() : pots().filter(p => p.id === g.from);
+  const vals = ps.map(p => ({p, v: potNow(p)})), have = vals.reduce((s, x) => s + x.v, 0) + (+g.have || 0);
+  const rate = vals.length ? (have > 0 ? vals.reduce((s, x) => s + x.v * netRate(x.p), 0) / Math.max(1, have) : vals.reduce((s, x) => s + netRate(x.p), 0) / vals.length) : 0;
+  return {have, rate, label: g.from === 'all' ? 'All your savings' : (ps[0] ? ps[0].name : 'Savings account')};
+}
+// monthly-compounded future value: what you have grows, plus a deposit every month
+const gFV = (cur, pmt, n, r) => r > 0 ? cur * (1 + r) ** n + pmt * (((1 + r) ** n - 1) / r) : cur + pmt * n;
+function gNeed(cur, target, n, r) { if (n <= 0) return Math.max(0, target - cur); const g = (1 + r) ** n; return Math.max(0, r > 0 ? (target - cur * g) * r / (g - 1) : (target - cur) / n); }
+function gMonths(cur, target, pmt, r) {
+  if (cur >= target) return 0;
+  if (pmt <= 0 && r <= 0) return Infinity;
+  if (r <= 0) return Math.ceil((target - cur) / pmt);
+  if (pmt <= 0 && cur <= 0) return Infinity;
+  const n = Math.log((target * r + pmt) / (cur * r + pmt)) / Math.log(1 + r);
+  return isFinite(n) ? Math.ceil(n) : Infinity;
+}
+const monthsTo = ym => { const t = today(), [y, m] = ym.split('-').map(Number); return (y - t.getFullYear()) * 12 + (m - 1 - t.getMonth()); };
+const inMonths = n => { const t = today(); return new Date(t.getFullYear(), t.getMonth() + n, 1).toLocaleDateString('en-PH', {month: 'short', year: 'numeric'}); };
+const spanTxt = n => !isFinite(n) ? 'never at this rate' : n <= 0 ? 'now' : n < 12 ? `${n} month${n === 1 ? '' : 's'}` : `${Math.floor(n / 12)} yr${n >= 24 ? 's' : ''}${n % 12 ? ` ${n % 12} mo` : ''}`;
+function habits() {   // your last 6 finished months
+  const past = series().filter(p => p.past && !p.now && (p.inc || p.exp)).slice(-6);
+  if (!past.length) return {save: 0, left: 0, n: 0};
+  const save = past.reduce((s, p) => s + p.sav, 0) / past.length, left = past.reduce((s, p) => s + p.inc - p.exp - p.manual, 0) / past.length;
+  // room = what you could put aside: what's left plus what you already save (deposits already count as money out)
+  return {n: past.length, save, left, room: Math.max(0, left + save)};
+}
+function goalCalc(g) {
+  const src = goalSource(g), r = src.rate / 12, target = +g.target, cur = src.have, left = Math.max(0, target - cur), h = habits();
+  const nBy = g.by ? monthsTo(g.by) : null, need = g.by ? gNeed(cur, target, Math.max(1, nBy), r) : null;
+  const pmt = +g.monthly || 0, nAt = pmt ? gMonths(cur, target, pmt, r) : null, nUsual = h.save > 0 ? gMonths(cur, target, h.save, r) : null;
+  return {src, r, target, cur, left, h, nBy, need, pmt, nAt, nUsual, prog: target > 0 ? Math.min(1, cur / target) : 0, done: cur >= target};
+}
+function goalLine(g, c) {
+  if (c.done) return '<span class="up">Reached</span>';
+  if (g.by) return c.nBy <= 0 ? `<span class="dn">Target date has passed</span> · ${esc(peso(c.left))} to go` : `Save <b>${esc(peso(Math.ceil(c.need)))}</b> a month to reach it by ${esc(inMonths(c.nBy))}`;
+  if (c.pmt) return `At ${esc(peso(c.pmt))} a month: <b>${isFinite(c.nAt) ? esc(inMonths(c.nAt)) : 'not reachable'}</b> (${spanTxt(c.nAt)})`;
+  if (c.nUsual != null) return `At your usual ${esc(pesoS(c.h.save))}/month: <b>${isFinite(c.nUsual) ? esc(inMonths(c.nUsual)) : 'not reachable'}</b>`;
+  return 'Set a date or a monthly amount to see your plan';
+}
+function goalsHTML() {
+  const gs = goals();
+  return `<div class="inshead"><h2 class="sech">Goals</h2><button class="ghost" data-act="goal-new">＋ Goal</button></div>
+    ${gs.length ? `<div class="potgrid">${gs.map(g => { const c = goalCalc(g); return `<button class="card goalcard" data-act="goal-open" data-g="${esc(g.id)}">
+      <div class="muted">${esc(g.name)} · ${esc(c.src.label)}</div><div class="gnum"><span class="serif">${esc(peso(c.cur))}</span> <span class="muted">of ${esc(peso(c.target))}</span></div>
+      <div class="bar"><i style="width:${(c.prog * 100).toFixed(1)}%"></i></div><div class="gline">${goalLine(g, c)}</div></button>`; }).join('')}</div>`
+    : `<button class="card goalempty" data-act="goal-new"><b>What are you saving for?</b><span class="muted">Set an amount, and Pera works out how much a month and how long it takes, using your savings and their interest.</span></button>`}`;
+}
+let goalEdit = null;
+function goalSheet(id, editing) {
+  const g = goals().find(x => x.id === id); if (!g) return closeSheet();
+  const c = goalCalc(g), h = c.h;
+  const base = g.by ? c.need : c.pmt || h.save || c.left / 12;
+  const step = base > 20000 ? 1000 : 500, amts = [...new Set([0.5, 0.75, 1, 1.5, 2].map(f => Math.max(step, Math.round(base * f / step) * step)))].slice(0, 5);
+  const afford = x => h.n && h.room > 0 ? Math.round(x / h.room * 100) : null;
+  const affTxt = x => { const a = afford(x); return a == null ? '' : a > 100 ? `<span class="dn">more than the ${esc(pesoS(h.room))} you can usually set aside</span>` : `${a}% of the ${esc(pesoS(h.room))} you can usually set aside`; };
+  const ratePct = (c.src.rate * 100).toFixed(2).replace(/\.?0+$/, '');
+  const body = `<div class="sheethead"><h2>${esc(g.name)}</h2><button class="ghost" data-act="close">Done</button></div>
+    <div class="gnum big2"><span class="serif">${esc(peso(c.cur))}</span> <span class="muted">of ${esc(peso(c.target))}</span></div>
+    <div class="bar"><i style="width:${(c.prog * 100).toFixed(1)}%"></i></div>
+    <p class="muted">${c.done ? 'You’ve reached this goal.' : `${esc(peso(c.left))} to go · ${Math.round(c.prog * 100)}% there`} · counting ${esc(c.src.label)}</p>
+    ${c.done ? '' : `<div class="gplans">
+      ${g.by ? `<div class="gplan"><span>To reach it by ${esc(inMonths(Math.max(0, c.nBy)))}</span><b>${c.nBy <= 0 ? 'Date passed' : esc(peso(Math.ceil(c.need))) + ' / month'}</b><small>${c.nBy > 0 ? `for ${spanTxt(c.nBy)} · ${affTxt(c.need)}` : 'Pick a later date'}</small></div>` : ''}
+      ${c.pmt ? `<div class="gplan"><span>Saving ${esc(peso(c.pmt))} a month</span><b>${isFinite(c.nAt) ? esc(inMonths(c.nAt)) : 'Not reachable'}</b><small>${spanTxt(c.nAt)}${affTxt(c.pmt) ? ' · ' + affTxt(c.pmt) : ''}</small></div>` : ''}
+      ${h.save > 0 ? `<div class="gplan"><span>At your usual pace (${esc(peso(h.save))} saved a month)</span><b>${isFinite(c.nUsual) ? esc(inMonths(c.nUsual)) : 'Not reachable'}</b><small>${spanTxt(c.nUsual)} · average of your last ${h.n} months</small></div>` : ''}
+    </div>
+    <h3>If you save each month…</h3>
+    <table class="gtable"><thead><tr><th>A month</th><th>You reach it</th><th>Takes</th></tr></thead><tbody>
+      ${amts.map(x => { const n = gMonths(c.cur, c.target, x, c.r), a = afford(x); return `<tr${g.by && n <= c.nBy ? ' class="ok"' : ''}><td>${esc(peso(x))}${a != null ? `<small class="${a > 100 ? 'dn' : ''}">${a}% of your room</small>` : ''}</td><td>${isFinite(n) ? esc(inMonths(n)) : '—'}</td><td>${spanTxt(n)}</td></tr>`; }).join('')}
+    </tbody></table>
+    <p class="muted">${+ratePct ? `Includes about ${ratePct}% a year interest after tax, from ${esc(c.src.label)}. ` : 'No interest counted. '}“Room” is what you can usually set aside: income minus spending over the last ${h.n || 0} months, counting what you already save as room.${g.by ? ' Highlighted rows reach it in time.' : ''}</p>`}
+    ${editing ? goalForm(g) : `<div class="row2"><button class="ghost" data-act="goal-edit" data-g="${esc(g.id)}">Edit goal</button><button class="ghost danger" data-act="goal-del" data-g="${esc(g.id)}">Delete</button></div>`}`;
+  goalEdit = editing ? id : null;
+  if (sheetOpen && document.querySelector('#sheetBody [data-goal]')) $('sheetBody').innerHTML = `<div data-goal="${esc(id)}">${body}</div>`; else openSheet(`<div data-goal="${esc(id)}">${body}</div>`);
+  if (editing) bindGoalForm(g);
+}
+function goalForm(g) {
+  const ps = pots();
+  return `<form id="gf" class="gform" novalidate>
+    <label for="gN">Goal</label><input id="gN" maxlength="40" placeholder="Emergency fund, house down payment…" value="${esc(g.name || '')}">
+    <label for="gT">Amount</label><input id="gT" class="amtin" inputmode="decimal" value="${g.target ? esc(g.target) : ''}" placeholder="500k">
+    <label for="gF">Count money from</label><select id="gF"><option value="all" ${g.from === 'all' ? 'selected' : ''}>All your savings</option>${ps.map(p => `<option value="${esc(p.id)}" ${g.from === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}<option value="none" ${g.from === 'none' ? 'selected' : ''}>Nothing yet / money outside Pera</option></select>
+    <label for="gH" id="gHL">Already set aside elsewhere (optional)</label><input id="gH" class="amtin" inputmode="decimal" value="${g.have ? esc(g.have) : ''}" placeholder="0">
+    <div class="two"><div><label for="gB">Reach it by (optional)</label><input id="gB" type="month" value="${esc(g.by || '')}"></div><div><label for="gM">Or save a month (optional)</label><input id="gM" class="amtin" inputmode="decimal" value="${g.monthly ? esc(g.monthly) : ''}" placeholder="10k"></div></div>
+    <p class="muted" id="gErr"></p>
+    <button class="go" type="submit">${g.id ? 'Save goal' : 'Add goal'}</button>
+    ${g.id ? '<button type="button" class="ghost" id="gCancel">Cancel</button>' : ''}
+  </form>`;
+}
+function bindGoalForm(g) {
+  const lbl = () => { $('gHL').textContent = $('gF').value === 'none' ? 'Already set aside (optional)' : 'Plus money outside Pera (optional)'; };
+  $('gF').addEventListener('change', lbl); lbl();
+  const cn = $('gCancel'); if (cn) cn.addEventListener('click', () => goalSheet(g.id, false));
+  $('gf').addEventListener('submit', e => {
+    e.preventDefault();
+    const name = $('gN').value.trim() || 'Savings goal', target = parseAmt($('gT').value), have = $('gH').value.trim() ? parseAmt($('gH').value) : 0, monthly = $('gM').value.trim() ? parseAmt($('gM').value) : 0, by = $('gB').value;
+    if (!(target > 0)) { $('gT').classList.add('bad'); $('gT').focus(); return; }
+    if (isNaN(have) || isNaN(monthly)) { $('gErr').textContent = 'Check the amounts.'; return; }
+    if (by && monthsTo(by) <= 0) { $('gB').classList.add('bad'); $('gErr').textContent = 'Pick a month after this one.'; return; }
+    const isNew = !g.id, before = JSON.parse(JSON.stringify(goals()));
+    const x = isNew ? {id: uid()} : goals().find(z => z.id === g.id);
+    Object.assign(x, {name, target, from: $('gF').value, have, by: by || '', monthly});
+    if (isNew) goals().push(x);
+    commit('meta'); goalSheet(x.id, false);
+    if (isNew) toast(`${name} added`, () => { S.meta.goals = before; commit('meta'); closeSheet(); });
+  });
+}
+function goalNew() {
+  openSheet(`<div data-goal="new"><div class="sheethead"><h2>New goal</h2><button class="ghost" data-act="close">Cancel</button></div>
+    <p class="muted">Tell Pera how much and either when or how much a month. It does the rest.</p>${goalForm({from: pots().length ? 'all' : 'none'})}</div>`);
+  bindGoalForm({}); setTimeout(() => $('gN').focus(), 50);
+}
 /* ---- pot sheet ---- */
 let sheetPot = null;   // {id, k} — the open pot, refreshed after every change
 function potSheet(id, k) {
@@ -964,10 +1099,10 @@ function spendingIn(months) {
   const rows = [];
   for (const {y, i} of months) {
     const m = S.years[y][i];
-    m.exp.forEach(x => rows.push({n: x.n || '', a: +x.a, y, i}));
+    m.exp.forEach(x => rows.push({n: x.n || '', a: +x.a, y, i, c: x.c}));
     billsIn(y, i).forEach(b => rows.push({n: b.name, a: +b.a, y, i, bill: true}));
   }
-  return rows.map(r => ({...r, cat: catOf(r.n, r.bill)}));
+  return rows.map(r => ({...r, cat: r.c && CAT_NAMES.includes(r.c) ? r.c : catOf(r.n, r.bill)}));
 }
 // a month's income and spending as Insights counts them (transfers out unless switched on)
 function monthFlows(y, i) {
@@ -1090,6 +1225,41 @@ const yearOpts = sel => [...new Set([...Object.keys(S.years), String(today().get
 const monOpts = sel => M.map((m, i) => `<option value="${i}" ${i == sel ? 'selected' : ''}>${m}</option>`).join('');
 const title = t => ({inc: 'income', exp: 'expense', sav: 'savings'}[t]);
 
+// your most used notes for one-tap shortcuts (last 4 months, used at least twice)
+function frequent(t) {
+  const cut = iso(new Date(today().getFullYear(), today().getMonth() - 4, 1)), by = {};
+  for (const y of Object.keys(S.years)) S.years[y].forEach((m, i) => (m[t] || []).forEach(x => {
+    if (!x.n || +x.a <= 0) return; const d = x.d || `${y}-${String(i + 1).padStart(2, '0')}-01`; if (d < cut) return;
+    const k = (merchantOf(x.n) || x.n).toLowerCase(), e = by[k] = by[k] || {n: x.n, a: +x.a, c: x.c, d, cnt: 0};
+    e.cnt++; if (d >= e.d) { e.d = d; e.a = +x.a; e.n = x.n; if (x.c) e.c = x.c; }
+  }));
+  return Object.values(by).filter(e => e.cnt >= 2).sort((a, b) => b.cnt - a.cnt || (a.d < b.d ? 1 : -1)).slice(0, 6);
+}
+// a category picked for a merchant applies to its other payments too
+function rememberCat(n, c) {
+  const m = merchantOf(n); if (!m || !c) return;
+  if (c === catOf(n) && !(S.meta.catRules || {})[m]) return;
+  S.meta.catRules = {...(S.meta.catRules || {}), [m]: c};
+}
+// "150 jollibee yesterday" · "+25k salary" · "1.84+329 grab nov 20"
+function parseQuick(text) {
+  let t = ' ' + String(text).replace(/\s+/g, ' ') + ' ', m, d = null, inc = false;
+  const t0 = today(); t0.setHours(0, 0, 0, 0);
+  const cut = r => { t = t.slice(0, r.index) + ' ' + t.slice(r.index + r[0].length); };
+  const past = (mo, dd) => { let x = mkDate(t0.getFullYear(), mo, dd); if (x > t0) x = mkDate(t0.getFullYear() - 1, mo, dd); return x; };
+  if ((m = /\s(today|ngayon|yesterday|kahapon)(?=\s)/i.exec(t))) { const x = new Date(t0); if (/yesterday|kahapon/i.test(m[1])) x.setDate(x.getDate() - 1); d = iso(x); cut(m); }
+  else if ((m = new RegExp(`\\s(?:on\\s+)?(${MRE})\\.?\\s+(\\d{1,2})(?=[\\s,])`, 'i').exec(t))) { d = iso(past(MON.indexOf(m[1].slice(0, 3).toLowerCase()), +m[2])); cut(m); }
+  else if ((m = /\s(?:last\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:rs?|rsday)?|fri(?:day)?|sat(?:urday)?)(?=\s)/i.exec(t))) { const w = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].indexOf(m[1].toLowerCase()), x = new Date(t0); x.setDate(x.getDate() - ((x.getDay() - w + 7) % 7 || 7)); d = iso(x); cut(m); }
+  let a = NaN;
+  // the amount: one marked with ₱, otherwise the biggest number ("2 burgers 150" → 150)
+  const re = /\s(\+)?(₱|php\s?)?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?k?(?:\+(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?k?)*)(?=[\s,])/gi, all = [];
+  while ((m = re.exec(t))) { all.push(m); re.lastIndex = m.index + m[0].length - 0; }
+  m = all.find(x => x[2]) || all.sort((x, y) => parseAmt(y[3]) - parseAmt(x[3]))[0];
+  if (m) { inc = !!m[1]; a = parseAmt(m[3]); cut(m); }
+  const n = t.replace(/\s+/g, ' ').trim();
+  if (/\b(salary|sahod|sweldo|payroll|income|received|refund)\b/i.test(n) && !/\bpaid\b/i.test(n)) inc = true;
+  return {a, n: n ? n[0].toUpperCase() + n.slice(1) : '', d, inc};
+}
 function entryForm(o) {
   // o: {t, y, i, id, a, n, d, edit} — t: exp | inc | dep (savings deposit) | bill | sav (old monthly savings, edit only)
   if (o.edit && o.t === 'sav') return oldSavForm(o);
@@ -1103,11 +1273,13 @@ function entryForm(o) {
   openSheet(`<div class="sheethead"><h2 id="efTitle">${o.edit ? 'Edit' : 'Add'} ${T[t]}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
     ${o.edit ? '' : `<div class="seg addseg">${[['exp', 'Expense'], ['inc', 'Income'], ['dep', 'Savings'], ['bill', 'Bill']].map(([k, l]) => `<button type="button" data-type="${k}" aria-pressed="${k === t}">${l}</button>`).join('')}</div>`}
     <form id="ef" novalidate>
+      ${o.edit ? '' : `<div data-for="exp inc" class="quick"><label for="fq">Type it</label><input id="fq" autocomplete="off" enterkeyhint="done" placeholder="150 jollibee yesterday"><div class="chips shortcuts" data-for="exp">${frequent('exp').map((f, k) => `<button type="button" class="chip" data-sc="exp" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div><div class="chips shortcuts" data-for="inc">${frequent('inc').map((f, k) => `<button type="button" class="chip" data-sc="inc" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div></div>`}
       <div data-for="dep"><label for="fp">Savings account</label>${ps.length ? `<select id="fp">${ps.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>` : `<p class="note">You don’t have a savings account yet. <button type="button" class="ghost" data-act="pot-new">Add one</button></p>`}</div>
       <div data-for="bill"><label for="fbn">Bill</label><select id="fbn">${billNames.map(n => `<option>${esc(n)}</option>`).join('')}<option value="__other">Other…</option></select><input id="fbo" maxlength="40" placeholder="Name of the bill" hidden style="margin-top:8px"></div>
       <label for="fa">Amount (sums like 1.84+329 work)</label>
       <input id="fa" class="amtin" inputmode="decimal" autocomplete="off" enterkeyhint="done" value="${o.a != null ? esc(o.a) : ''}">
       <div data-for="exp inc"><label for="fn">Note</label><input id="fn" maxlength="60" enterkeyhint="done" placeholder="Groceries, salary, bills…" value="${esc(o.n || '')}"></div>
+      <div data-for="exp"><label>Category <small class="muted" id="fcHint"></small></label><div class="chips catchips" id="fc">${CAT_NAMES.map(c => `<button type="button" class="chip" data-cat="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div></div>
       <div class="two"><div><label for="fdt" id="fdtL">Date</label><input id="fdt" type="date" value="${esc(dflt)}"></div>
         <div data-for="bill"><label for="fbN">Payments</label><select id="fbN">${NOPTS.map(n => `<option value="${n}">${n === 1 ? 'Once' : n + ' months'}</option>`).join('')}</select></div></div>
       <p class="muted" id="efHint"></p>
@@ -1137,6 +1309,33 @@ function entryForm(o) {
       const past = (S.meta.bills || []).filter(x => sameName(x.name, v)).sort((a, b) => a.due.localeCompare(b.due)).pop();
       if (past && !$('fa').value) { $('fa').value = past.a; const d = new Date(dnum(past.due)); $('fdt').value = iso(mkDate(d.getFullYear(), d.getMonth() + 1, d.getDate())); hint(); }
     });
+    // category: guessed from the note until you pick one
+    let cat = o.c || null, picked = !!o.c;
+    const paintCat = () => {
+      const g = picked ? cat : ($('fn').value.trim() ? catOf($('fn').value.trim()) : null);
+      body.querySelectorAll('[data-cat]').forEach(b => b.setAttribute('aria-pressed', b.dataset.cat === g));
+      const m = merchantOf($('fn').value.trim());
+      $('fcHint').textContent = picked ? (m && cat !== catOf($('fn').value.trim()) ? `· remembered for ${m}` : '') : g ? '· guessed from the note' : '';
+    };
+    body.querySelectorAll('[data-cat]').forEach(b => b.addEventListener('click', () => { picked = !(picked && cat === b.dataset.cat); cat = picked ? b.dataset.cat : null; paintCat(); }));
+    $('fn').addEventListener('input', paintCat); paintCat();
+    // quick line: "150 jollibee yesterday", "+25k salary"
+    const fq = $('fq');
+    if (fq) {
+      fq.addEventListener('input', () => {
+        const q = parseQuick(fq.value);
+        if (q.inc && t === 'exp') body.querySelector('[data-type=inc]').click();
+        $('fa').value = isNaN(q.a) ? '' : q.a; $('fn').value = q.n; if (q.d) $('fdt').value = q.d; else $('fdt').value = dflt;
+        const f = frequent(t).find(x => q.n && sameName(x.n, q.n)); if (f && f.c && !picked) { cat = f.c; picked = true; }
+        hint(); paintCat();
+      });
+      body.querySelectorAll('[data-sc]').forEach(b => b.addEventListener('click', () => {
+        const f = frequent(b.dataset.sc)[+b.dataset.k]; if (!f) return;
+        $('fn').value = f.n; $('fa').value = f.a; if (f.c) { cat = f.c; picked = true; } paintCat();
+        $('fa').focus(); $('fa').select();
+      }));
+      setTimeout(() => fq.focus(), 50);
+    }
     show();
     $('ef').addEventListener('submit', e => {
       e.preventDefault();
@@ -1166,10 +1365,11 @@ function entryForm(o) {
         const from = S.years[o.y][o.i], k = from[t].findIndex(z => z.id === o.id); if (k < 0) return closeSheet();
         const x = from[t][k], before = {...x}, keys = new Set(['y' + o.y, 'y' + y]);
         x.a = a; x.n = n; if (o.d || dt !== dflt) x.d = dt;
+        if (t === 'exp') { if (picked && cat) x.c = cat; else delete x.c; rememberCat(n, picked && cat); }
         if (y !== String(o.y) || i !== o.i) { from[t].splice(k, 1); ensureYear(y)[i][t].push(x); keys.add('meta'); }
         closeSheet(); commit(...keys); toast('Saved'); return;
       }
-      const it = {id: uid(), a, n, d: dt}; ensureYear(y)[i][t].push(it); closeSheet(); commit('y' + y, 'meta');
+      const it = {id: uid(), a, n, d: dt}; if (t === 'exp' && picked && cat) { it.c = cat; rememberCat(n, cat); } ensureYear(y)[i][t].push(it); closeSheet(); commit('y' + y, 'meta');
       toast(`Added to ${M[i]}${y !== String(today().getFullYear()) ? ' ' + y : ''}`, () => { const m = S.years[y][i]; m[t] = m[t].filter(z => z.id !== it.id); commit('y' + y); });
     });
     const d = $('fdel');
@@ -1769,13 +1969,39 @@ function mapCsv(table) {
     $('cGo').addEventListener('click', () => reviewRows(rowsFromTable(body, cols()), 'CSV'));
   });
 }
-const isDup = r => { const [y, mo] = r.date.split('-'), m = S.years[y] && S.years[y][+mo - 1]; return !!m && m[r.dir].some(x => Math.abs(x.a - r.a) < 0.005 && (x.d === r.date || (x.n && x.n === r.desc))); };
+/* duplicates: each existing entry can only match one statement row
+   same   — same amount, same day and same description (or imported before with that description) → unticked
+   likely — same amount within 3 days and the same shop as something you typed → unticked
+   maybe  — same amount within 1 day, different note → stays ticked, flagged */
+const words = n => new Set(String(n || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(' ').filter(w => w.length > 2 && !/^(pos|purchase|payment|visa|online|inc|corp|the|and|for|from|with)$/.test(w)));
+function markDups(rows) {
+  const used = new Set();
+  const near = r => { const out = [], d0 = new Date(dnum(r.date));
+    for (const k of [-1, 0, 1]) { const d = new Date(d0.getFullYear(), d0.getMonth() + k, 1), y = String(d.getFullYear()), m = S.years[y] && S.years[y][d.getMonth()];
+      if (m) m[r.dir].forEach(x => out.push({x, y, i: d.getMonth(), dd: Math.abs(Math.round((dnum(x.d || `${y}-${String(d.getMonth() + 1).padStart(2, '0')}-15`) - dnum(r.date)) / 864e5)), dated: !!x.d})); }
+    return out.filter(c => Math.abs(+c.x.a - r.a) < 0.005); };
+  const level = (r, c) => {
+    if (c.x.n && c.x.n === r.desc && (c.dd === 0 || (c.x.src === 'import' && c.dd <= 3))) return 'same';
+    if (!c.dated) return null;
+    const a = words(c.x.n), b = words(r.desc), mr = merchantOf(r.desc), mx = merchantOf(c.x.n || '');
+    const shop = (mr && mx && mr === mx) || [...a].some(w => b.has(w)) || (c.x.n && r.desc.toLowerCase().includes(c.x.n.toLowerCase()));
+    if (shop && c.dd <= 3) return 'likely';
+    if (c.dd <= 1 && c.x.src !== 'import') return 'maybe';
+    return null;
+  };
+  rows.forEach(r => { r.dup = null; r.dupOf = null; });
+  for (const lv of ['same', 'likely', 'maybe']) for (const r of rows) {
+    if (r.dup) continue;
+    const c = near(r).filter(c => !used.has(c.x.id) && level(r, c) === lv).sort((p, q) => p.dd - q.dd)[0];
+    if (c) { used.add(c.x.id); r.dup = lv; r.dupOf = `${c.x.n || 'No note'} · ${fmtDate(c.x.d || `${c.y}-${String(c.i + 1).padStart(2, '0')}-01`, c.x.d ? {month: 'short', day: 'numeric'} : {month: 'long'})}`; }
+  }
+}
 function reviewRows(rows, source) {
   rows.sort((p, q) => p.date.localeCompare(q.date));
-  rows.forEach(r => { r.dup = isDup(r); r.on = !r.dup; });
+  markDups(rows); rows.forEach(r => { r.on = !r.dup || r.dup === 'maybe'; });
   imp = {rows, source};
   openSheet(`<div class="sheethead"><h2>Review ${rows.length} transactions</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
-    <p class="muted">Tap ↓ / ↑ to switch money in or out. Untick anything you don’t want. Rows already in Pera are unticked.</p>
+    <p class="muted">Tap ↓ / ↑ to switch money in or out. Untick anything you don’t want. Rows already in Pera are unticked.</p><p class="dupsum" id="impDup"></p>
     <div class="imptools"><button class="ghost" data-act="imp-all-on">Select all</button><button class="ghost" data-act="imp-all-off">Select none</button><button class="ghost" data-act="imp-flip" style="margin-left:auto">⇅ Flip all</button></div>
     <ul class="list implist" id="impList"></ul>
     <p class="muted" id="impSum"></p>
@@ -1785,13 +2011,15 @@ function renderReview() {
   if (!imp) return;
   $('impList').innerHTML = imp.rows.map((r, k) => `<li class="${r.on ? '' : 'off'}">
     <button class="chk ${r.on ? 'on' : ''}" data-act="imp-tog" data-k="${k}" aria-label="${r.on ? 'Skip' : 'Include'} ${esc(r.desc)}"><span>${r.on ? '✓' : ''}</span></button>
-    <span class="t">${esc(r.desc)}<small>${esc(fmtDate(r.date))}${r.dup ? ' · already in Pera' : ''}</small></span>
+    <span class="t">${esc(r.desc)}<small>${esc(fmtDate(r.date))}</small>${r.dup ? `<small class="dupnote ${r.dup}">${r.dup === 'same' ? 'Already in Pera' : r.dup === 'likely' ? 'Looks like what you added' : 'Maybe already added'}: ${esc(r.dupOf)}</small>` : ''}</span>
     <button class="dirbtn ${r.dir}" data-act="imp-dir" data-k="${k}" aria-label="Switch to ${r.dir === 'inc' ? 'money out' : 'money in'}">${r.dir === 'inc' ? '↓ +' : '↑ −'}${esc(peso(r.a, 2))}</button></li>`).join('');
   const on = imp.rows.filter(r => r.on), inc = on.filter(r => r.dir === 'inc').reduce((t, r) => t + r.a, 0), exp = on.filter(r => r.dir === 'exp').reduce((t, r) => t + r.a, 0);
   const months = [...new Set(on.map(r => r.date.slice(0, 7)))].sort().map(k => `${M[+k.slice(5) - 1].slice(0, 3)} ${k.slice(0, 4)}`);
   $('impSum').textContent = on.length ? `Money in ${peso(inc, 2)} · money out ${peso(exp, 2)} · ${months.join(', ')}` : 'Nothing selected.';
   $('impGo').textContent = on.length ? `Import ${on.length} transaction${on.length === 1 ? '' : 's'}` : 'Import';
   $('impGo').disabled = !on.length;
+  const ds = imp.rows.filter(r => r.dup === 'same').length, dl = imp.rows.filter(r => r.dup === 'likely').length, dm = imp.rows.filter(r => r.dup === 'maybe').length;
+  $('impDup').innerHTML = ds + dl + dm ? [ds && `<b>${ds}</b> already in Pera`, dl && `<b>${dl}</b> look like entries you added by hand`, dm && `<b>${dm}</b> might be (still ticked, check them)`].filter(Boolean).join(' · ') : '';
 }
 function importRows() {
   const on = imp.rows.filter(r => r.on); if (!on.length) return;
@@ -1837,6 +2065,14 @@ document.addEventListener('click', e => {
     case 'ins-cat': return catSheet(d.c);
     case 'nudge-cat': insP = 'month'; render(); return catSheet(d.c);
     case 'go-view': showView(d.v); render(); return;
+    case 'goal-new': return goalNew();
+    case 'goal-open': return goalSheet(d.g, false);
+    case 'goal-edit': return goalSheet(d.g, true);
+    case 'goal-del': {
+      const k = goals().findIndex(x => x.id === d.g); if (k < 0) return;
+      const [x] = goals().splice(k, 1); closeSheet(); commit('meta');
+      toast(`${x.name} deleted`, () => { goals().splice(k, 0, x); commit('meta'); }); return;
+    }
     case 'cat-pick': return catPick(d.m, d.c);
     case 'cat-set': {
       const rules = S.meta.catRules = {...(S.meta.catRules || {})}, old = rules[d.m];
@@ -1848,7 +2084,7 @@ document.addEventListener('click', e => {
     case 'eye': hideTotal = !hideTotal; store.set('pera:hideTotal', hideTotal); render(); return;
     case 'fab': closeSheet(); return entryForm({});
     case 'settings': return settings();
-    case 'edit-entry': { const x = S.years[d.y][+d.i][d.t].find(z => z.id === d.id); if (x) entryForm({t: d.t, y: d.y, i: +d.i, id: d.id, a: x.a, n: x.n, d: x.d, edit: true}); return; }
+    case 'edit-entry': { const x = S.years[d.y][+d.i][d.t].find(z => z.id === d.id); if (x) entryForm({t: d.t, y: d.y, i: +d.i, id: d.id, a: x.a, n: x.n, d: x.d, c: x.c, edit: true}); return; }
     case 'edit-sav': return entryForm({t: 'sav', y: d.y, i: +d.i, a: S.years[d.y][+d.i].sav || '', edit: true});
     case 'goto-month': { showView('months'); selYear = d.y; render(); return monthSheet(d.y, +d.i); }
     case 'add-in-month': return entryForm({y: d.y, i: +d.i});
@@ -1880,11 +2116,11 @@ document.addEventListener('click', e => {
     case 'imp-missing': return importApply('missing');
     case 'statement': return statementSheet();
     case 'imp-tog': { const r = imp && imp.rows[+d.k]; if (r) { r.on = !r.on; renderReview(); } return; }
-    case 'imp-dir': { const r = imp && imp.rows[+d.k]; if (r) { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; r.dup = isDup(r); renderReview(); } return; }
+    case 'imp-dir': { const r = imp && imp.rows[+d.k]; if (r) { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; markDups(imp.rows); r.on = !r.dup || r.dup === 'maybe'; renderReview(); } return; }
     case 'imp-all-on': if (imp) { imp.rows.forEach(r => { r.on = true; }); renderReview(); } return;
     case 'imp-all-off': if (imp) { imp.rows.forEach(r => { r.on = false; }); renderReview(); } return;
     case 'imp-go': return importRows();
-    case 'imp-flip': if (imp) { imp.rows.forEach(r => { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; r.dup = isDup(r); }); renderReview(); } return;
+    case 'imp-flip': if (imp) { imp.rows.forEach(r => { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; }); markDups(imp.rows); imp.rows.forEach(r => { r.on = !r.dup || r.dup === 'maybe'; }); renderReview(); } return;
     case 'imp-all': return importApply('all');
     case 'year-add': return addYear(d.y);
     case 'pot-open': case 'pot-new': case 'pot-edit': case 'pot-cycle': case 'cycle-new': case 'cycle-next': case 'dep-del': case 'dep-edit': case 'dep-cancel': case 'cyc-edit': case 'cyc-cancel': case 'cyc-del': case 'cyc-restore': case 'cyc-forever': case 'plan-edit': case 'plan-cancel': case 'fc-rate': case 'fc-rate-cancel': case 'fc-rate-reset': return savingsAct(d);
