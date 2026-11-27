@@ -34,6 +34,8 @@ let dirty = new Set();    // doc keys waiting to upload
 let syncState = 'idle';   // idle | saving | offline | error
 let pushing = false;
 let selYear = String(today().getFullYear());
+let detail = null;        // {y,i} month shown in the desktop side panel
+const desk = matchMedia('(min-width:900px)');
 
 function blank() { return {meta: {years: [], bills: [], accounts: [], maya: null, phone: null}, years: {}}; }
 const kData = () => 'pera:data:' + user.id;
@@ -118,6 +120,7 @@ function series() {
 function render() {
   const ser = series();
   renderHome(ser); renderMonths(ser); renderSavings(); renderBills();
+  if (desk.matches) renderDetail(ser);
 }
 function renderHome(ser) {
   const cur = ser.find(p => p.now) || ser.filter(p => p.past).pop() || ser[0];
@@ -183,7 +186,8 @@ function renderMonths(ser) {
   $('yearSeg').innerHTML = ys.map(y => `<button data-act="year" data-y="${esc(y)}" aria-pressed="${y === selYear}">${esc(y)}</button>`).join('')
     + `<button data-act="year" data-y="+" aria-label="Add a year">＋ Year</button>`;
   const rows = ser.filter(p => p.y === selYear);
-  $('monthList').innerHTML = rows.map(p => `<li class="${p.now ? 'now' : ''}"><button class="rowbtn" data-act="month" data-i="${p.i}">
+  const sel = desk.matches && detail && detail.y === selYear ? detail.i : -1;
+  $('monthList').innerHTML = rows.map(p => `<li class="${p.i === sel ? 'sel' : p.now ? 'now' : ''}"><button class="rowbtn" data-act="month" data-i="${p.i}">
     <span class="t"><b>${M[p.i]}</b><small><span class="up">+${esc(pesoS(p.inc))}</span> · <span class="dn">−${esc(pesoS(p.exp))}</span> · saved ${esc(pesoS(p.sav))}</small></span>
     <span class="mr">${p.past ? 'Total' : 'Planned'}<b>${esc(peso(p.total))}</b></span></button></li>`).join('')
     || '<li class="empty">No months yet. Tap ＋ Year.</li>';
@@ -204,14 +208,15 @@ function renderSavings() {
       <div class="bar"><i style="width:${(prog * 100).toFixed(1)}%"></i></div>
       <div class="muted">${Math.round(prog * 100)}% through this cycle · ${esc(peso(cur.deposits))} put in · ${esc(peso(cur.net_int, 2))} interest after tax</div></div>
       <h2>Maya ladder plan</h2><div class="ladder">${cyc.map(c => `<div class="r ${Date.parse(c.end) > now ? 'f' : ''}"><span>${esc(fmtDate(c.end, {month: 'short', year: 'numeric'}))}</span><i style="width:${(c.end_bal / maxB * 100).toFixed(1)}%"></i><span>${esc(pesoS(c.end_bal))}</span></div>`).join('')}</div>
-      <p class="muted">Solid = matured, faded = planned.</p><h2>Other pots</h2>`;
+      <p class="muted">Solid = matured, faded = planned.</p>`;
   }
+  h = `<div class="savcols"><div>${h}</div><div><h2${cyc.length ? '' : ' style="margin-top:0"'}>Other pots</h2>`;
   if (m.phone) {
     const pp = Math.min(1, Math.max(0, (now - Date.parse(m.phone.start)) / (Date.parse(m.phone.end) - Date.parse(m.phone.start))));
     h += `<div class="card"><div class="muted">Phone upgrade fund · Maya</div><div class="serif" style="font-size:26px">${esc(peso(m.phone.end_bal))}</div><div class="bar"><i style="width:${(pp * 100).toFixed(1)}%"></i></div><div class="muted">Projected by ${esc(fmtDate(m.phone.end, {month: 'short', year: 'numeric'}))}</div></div>`;
   }
   h += (m.accounts || []).map((a, j) => `<button class="card" data-act="acct" data-j="${j}"><div class="muted">${esc(a.name)}</div><div class="serif" style="font-size:26px">${esc(peso(+a.bal, 2))}</div><div class="muted">As of ${esc(a.asof)} · tap to update</div></button>`).join('');
-  h += `<button class="go" data-act="acct" data-j="new">Add an account</button>`;
+  h += `<button class="go" data-act="acct" data-j="new">Add an account</button></div></div>`;
   w.innerHTML = h;
 }
 
@@ -303,13 +308,26 @@ function entryForm(o) {
   });
 }
 
-function monthSheet(y, i) {
-  const p = series().find(q => q.y === y && q.i === i);
-  openSheet(`<div class="sheethead"><h2>${M[i]} ${esc(y)}</h2><button class="ghost" data-act="add-in-month" data-y="${esc(y)}" data-i="${i}">+ Add</button></div>
+function monthHTML(y, i, ser) {
+  const p = (ser || series()).find(q => q.y === y && q.i === i);
+  if (!p) return '<p class="empty">Pick a month.</p>';
+  return `<div class="sheethead"><h2>${M[i]} ${esc(y)}</h2><button class="ghost" data-act="add-in-month" data-y="${esc(y)}" data-i="${i}">+ Add</button></div>
     <div class="trio"><div class="tile"><span>Income</span><b class="up">${esc(peso(p.inc))}</b></div><div class="tile"><span>Spent</span><b class="dn">${esc(peso(p.exp))}</b></div><div class="tile"><span>Saved</span><b>${esc(peso(p.sav))}</b></div></div>
     <p class="muted">Total money at month end: <b style="color:var(--ink)">${esc(peso(p.total, 2))}</b></p>
     <ul class="list">${entryRows(y, i) || '<li class="empty">No entries.</li>'}</ul>
-    <button class="plain" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}">Set savings for ${M[i]}</button>`);
+    <button class="plain" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}">Set savings for ${M[i]}</button>`;
+}
+function monthSheet(y, i) {
+  if (desk.matches) { detail = {y, i}; render(); return; }
+  openSheet(monthHTML(y, i));
+}
+function renderDetail(ser) {
+  const ys = Object.keys(S.years);
+  if (!detail || !S.years[detail.y]) {
+    const now = today(), cy = String(now.getFullYear());
+    detail = S.years[selYear] ? {y: selYear, i: selYear === cy ? now.getMonth() : 0} : ys.length ? {y: ys.sort()[0], i: 0} : null;
+  }
+  $('monthDetail').innerHTML = detail ? monthHTML(detail.y, detail.i, ser) : '<p class="empty">No months yet.</p>';
 }
 
 function billForm(j) {
@@ -400,13 +418,13 @@ function exportData() {
 /* ================= one click handler for everything ================= */
 function showView(v) {
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('on', x.id === 'v-' + v));
-  document.querySelectorAll('.tab').forEach(x => x.dataset.v === v ? x.setAttribute('aria-current', 'page') : x.removeAttribute('aria-current'));
+  document.querySelectorAll('.tab[data-v]').forEach(x => x.dataset.v === v ? x.setAttribute('aria-current', 'page') : x.removeAttribute('aria-current'));
   window.scrollTo(0, 0);
   if (v === 'home') drawChart();
   store.set('pera:tab', v);
 }
 document.addEventListener('click', e => {
-  const tab = e.target.closest('.tab'); if (tab) return showView(tab.dataset.v);
+  const tab = e.target.closest('.tab[data-v]'); if (tab) return showView(tab.dataset.v);
   const el = e.target.closest('[data-act]'); if (!el) return;
   const d = el.dataset, j = d.j;
   switch (d.act) {
@@ -419,7 +437,7 @@ document.addEventListener('click', e => {
     case 'month': return monthSheet(selYear, +d.i);
     case 'year':
       if (d.y === '+') { const ys = Object.keys(S.years).map(Number); const n = String(ys.length ? Math.max(...ys) + 1 : today().getFullYear()); ensureYear(n); selYear = n; commit(); }
-      else { selYear = d.y; render(); }
+      else { selYear = d.y; if (desk.matches) detail = {y: d.y, i: detail && detail.y === d.y ? detail.i : 0}; render(); }
       return;
     case 'acct': return acctForm(j);
     case 'bill-pay': { const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta'); return; }
@@ -434,6 +452,13 @@ document.addEventListener('click', e => {
 $('fab').dataset.act = 'fab';
 $('addBill').dataset.act = 'bill-add';
 $('settingsBtn').dataset.act = 'settings';
+
+document.addEventListener('keydown', e => {
+  if (e.key.toLowerCase() !== 'n' || e.metaKey || e.ctrlKey || e.altKey || sheetOpen || !user) return;
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+  e.preventDefault(); entryForm({});
+});
+desk.addEventListener('change', () => { closeSheet(); if (user) render(); });
 
 /* ================= auth ================= */
 let signUpMode = false;

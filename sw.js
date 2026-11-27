@@ -1,6 +1,6 @@
 // Pera service worker: keeps the app shell available offline.
 // Bump VERSION whenever app files change so phones pick up the update.
-const VERSION = 'pera-v2';
+const VERSION = 'pera-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'config.js', 'vendor/supabase.js',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
