@@ -224,6 +224,7 @@ function render() {
   if (desk.matches) renderDetail(ser);
   else if (sheetOpen && sheetMonth && S.years[sheetMonth.y]) $('sheetBody').innerHTML = monthHTML(sheetMonth.y, sheetMonth.i, ser);
   if (sheetOpen && sheetPot) potSheet(sheetPot.id, sheetPot.k);
+  if (sheetOpen && sheetBill) $('sheetBody').innerHTML = billGroupHTML(sheetBill);
 }
 function renderHome(ser) {
   const cur = ser.find(p => p.now) || ser.filter(p => p.past).pop() || ser[0];
@@ -392,18 +393,12 @@ function billTotals(now) {
   box.innerHTML = `<div class="muted">Unpaid bills</div><div class="big billbig">${esc(peso(sum(un), 2))}</div>
     <div class="muted">${un.length} payment${un.length === 1 ? '' : 's'}${late.length ? ` · <span class="dn">${esc(peso(sum(late), 2))} past due</span> <button class="plain inl" data-act="bills-late-paid">Mark all paid</button>` : ''}</div>
     <div class="trio billtrio"><div class="tile"><span>This month</span><b class="dn">${esc(pesoS(sum(thisM)))}</b><small>${M[cm.i].slice(0, 3)} · ${thisM.length} bill${thisM.length === 1 ? '' : 's'}</small></div><div class="tile"><span>Next month</span><b>${esc(pesoS(sum(nextM)))}</b><small>${M[nm.i].slice(0, 3)} · ${nextM.length} bill${nextM.length === 1 ? '' : 's'}</small></div><div class="tile"><span>Later</span><b>${esc(pesoS(sum(later)))}</b><small>${later.length} bill${later.length === 1 ? '' : 's'}</small></div></div>
-    <details class="perbill"${per.length <= 4 ? ' open' : ''}><summary>By bill</summary><ul>${per.map(e => `<li><span>${esc(e.name)}<small>${e.n} left${e.next ? ` · next ${esc(fmtDate(e.next.due, {month: 'short', day: 'numeric'}))} ${esc(peso(+e.next.a, 2))}` : ''}${e.n > 1 ? ` · until ${esc(fmtDate(e.last, {month: 'short', year: 'numeric'}))}` : ''}</small></span><b>${esc(peso(e.a, 2))}</b></li>`).join('')}</ul></details>`;
+    <details class="perbill"${per.length <= 4 ? ' open' : ''}><summary>By bill</summary><ul>${per.map(e => `<li><button class="pbrow" data-act="bill-group" data-n="${esc(e.name)}"><span>${esc(e.name)}<small>${e.n} left${e.next ? ` · next ${esc(fmtDate(e.next.due, {month: 'short', day: 'numeric'}))} ${esc(peso(+e.next.a, 2))}` : ''}${e.n > 1 ? ` · until ${esc(fmtDate(e.last, {month: 'short', year: 'numeric'}))}` : ''}</small></span><b>${esc(peso(e.a, 2))}</b><span class="chev">›</span></button></li>`).join('')}</ul></details>`;
 }
 function renderBills() {
   const now = today(); now.setHours(0, 0, 0, 0);
   const b = (S.meta.bills || []).map((x, j) => ({...x, j})).sort((p, q) => (p.paid - q.paid) || p.due.localeCompare(q.due));
-  $('billList').innerHTML = b.map(x => {
-    const late = !x.paid && Date.parse(x.due + 'T00:00:00') < now.getTime();
-    return `<li><button class="chk ${x.paid ? 'on' : ''}" data-act="bill-pay" data-j="${x.j}" aria-label="${x.paid ? 'Mark unpaid' : 'Mark paid'}: ${esc(x.name)}"><span>${x.paid ? '✓' : ''}</span></button>
-      <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(x.name)}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid · ' : late ? 'Past due · ' : 'Due '}${esc(fmtDate(x.due))}${x.count === false ? '' : x.paid ? ' · not counted as expense' : ` · expense in ${M[billMonth(x.due).i].slice(0, 3)} ${billMonth(x.due).y}`}</small></span>
-      <span class="amt" style="${x.paid ? 'opacity:.5;text-decoration:line-through' : ''}">${esc(peso(+x.a, 2))}</span></button>
-      <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete ${esc(x.name)}">×</button></li>`;
-  }).join('') || '<li class="empty">No bills yet. Type one above.</li>';
+  $('billList').innerHTML = b.map(x => billRow(x, now)).join('') || '<li class="empty">No bills yet. Type one above.</li>';
   billTotals(now);
   fillPicker();
   // your own bills first, then the common ones
@@ -412,6 +407,30 @@ function renderBills() {
   $('qbChips').innerHTML = names.map(n => `<button type="button" class="chip" data-act="qb-name" data-n="${esc(n)}" aria-pressed="false">${esc(n)}</button>`).join('');
   markChip();
 }
+function billRow(x, now, grouped) {
+    const late = !x.paid && Date.parse(x.due + 'T00:00:00') < now.getTime();
+    if (grouped) return `<li><button class="chk ${x.paid ? 'on' : ''}" data-act="bill-pay" data-j="${x.j}" aria-label="${x.paid ? 'Mark unpaid' : 'Mark paid'}: due ${esc(fmtDate(x.due))}"><span>${x.paid ? '✓' : ''}</span></button>
+      <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(fmtDate(x.due))}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid' : late ? 'Past due' : 'Upcoming'}${x.count === false || x.paid ? '' : ` · expense in ${M[billMonth(x.due).i].slice(0, 3)} ${billMonth(x.due).y}`}</small></span>
+      <span class="amt" style="${x.paid ? 'opacity:.5;text-decoration:line-through' : ''}">${esc(peso(+x.a, 2))}</span></button>
+      <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete payment due ${esc(fmtDate(x.due))}">×</button></li>`;
+    return `<li><button class="chk ${x.paid ? 'on' : ''}" data-act="bill-pay" data-j="${x.j}" aria-label="${x.paid ? 'Mark unpaid' : 'Mark paid'}: ${esc(x.name)}"><span>${x.paid ? '✓' : ''}</span></button>
+      <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(x.name)}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid · ' : late ? 'Past due · ' : 'Due '}${esc(fmtDate(x.due))}${x.count === false ? '' : x.paid ? ' · not counted as expense' : ` · expense in ${M[billMonth(x.due).i].slice(0, 3)} ${billMonth(x.due).y}`}</small></span>
+      <span class="amt" style="${x.paid ? 'opacity:.5;text-decoration:line-through' : ''}">${esc(peso(+x.a, 2))}</span></button>
+      <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete ${esc(x.name)} due ${esc(fmtDate(x.due))}">×</button></li>`;
+}
+// all payments of one bill, to check, tick or delete them
+let sheetBill = null;
+function billGroupHTML(name) {
+  const now = today(); now.setHours(0, 0, 0, 0);
+  const all = (S.meta.bills || []).map((x, j) => ({...x, j})).filter(x => sameName(x.name, name)).sort((p, q) => p.due.localeCompare(q.due));
+  const un = all.filter(x => !x.paid), sum = l => l.reduce((s, x) => s + +x.a, 0);
+  return `<div class="sheethead"><h2>${esc(name)}</h2><button type="button" class="ghost" data-act="close">Done</button></div>
+    ${all.length ? `<p class="muted">${esc(peso(sum(un), 2))} unpaid · ${un.length} of ${all.length} payment${all.length === 1 ? '' : 's'} left${all.length - un.length ? ` · ${esc(peso(sum(all.filter(x => x.paid)), 2))} paid` : ''}</p>
+    <p class="muted">Tap the circle when paid, tap a payment to edit it, or × to delete it.</p>
+    <ul class="list">${all.map(x => billRow(x, now, true)).join('')}</ul>
+    <button class="danger" data-act="bill-group-del" data-n="${esc(name)}">Delete all ${all.length} ${esc(name)} payment${all.length === 1 ? '' : 's'}</button>` : '<p class="empty">No payments left for this bill.</p>'}`;
+}
+function billGroupSheet(name) { openSheet(billGroupHTML(name)); sheetBill = name; }
 
 
 /* ================= quick-add bills: "SPayLater 10,794 Jan 5 x3" ================= */
@@ -1228,7 +1247,7 @@ function renderInsights(ser) {
 /* ================= sheet + toast ================= */
 let sheetOpen = false;
 function openSheet(html, onReady) {
-  sheetMonth = null; sheetPot = null;
+  sheetMonth = null; sheetPot = null; sheetBill = null;
   $('sheetBody').innerHTML = html;
   $('scrim').classList.add('on'); $('sheet').classList.add('on'); document.body.classList.add('locked');
   sheetOpen = true;
@@ -1236,7 +1255,7 @@ function openSheet(html, onReady) {
 }
 function closeSheet() {
   $('scrim').classList.remove('on'); $('sheet').classList.remove('on'); document.body.classList.remove('locked');
-  sheetOpen = false; sheetMonth = null; sheetPot = null;
+  sheetOpen = false; sheetMonth = null; sheetPot = null; sheetBill = null;
 }
 $('scrim').addEventListener('click', closeSheet);
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetOpen) closeSheet(); });
@@ -2309,6 +2328,12 @@ document.addEventListener('click', e => {
       const t = todayIso(), late = (S.meta.bills || []).filter(x => !x.paid && x.due && x.due < t); if (!late.length) return;
       late.forEach(x => { x.paid = true; }); commit('meta');
       toast(`${late.length} past-due bill${late.length === 1 ? '' : 's'} marked paid`, () => { late.forEach(x => { x.paid = false; }); commit('meta'); }); return;
+    }
+    case 'bill-group': return billGroupSheet(d.n);
+    case 'bill-group-del': {
+      const before = S.meta.bills.slice(), gone = S.meta.bills.filter(x => sameName(x.name, d.n)); if (!gone.length) return;
+      S.meta.bills = S.meta.bills.filter(x => !sameName(x.name, d.n)); closeSheet(); commit('meta');
+      toast(`${gone.length} ${d.n} payment${gone.length === 1 ? '' : 's'} deleted`, () => { S.meta.bills = before; commit('meta'); }); return;
     }
     case 'bill-edit': return billForm(+j);
     case 'bill-del': return removeBill(+j);
