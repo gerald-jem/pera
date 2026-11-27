@@ -490,11 +490,14 @@ function potSheet(id, k) {
   const p = potById(id); if (!p) return closeSheet();
   if (p.kind === 'td') k = k == null || k >= (p.cycles || []).length ? tdCurrent(p) : Math.max(0, k);
   const editing = sheetPot && sheetPot.id === id ? sheetPot.edit : null;
-  const html = potHTML(p, k, editing);
+  const html = potHTML(p, k, editing, sheetPot && sheetPot.id === id && sheetPot.k === k && sheetPot.cedit);
   if (sheetOpen && sheetPot && sheetPot.id === id) $('sheetBody').innerHTML = html; else openSheet(html);
-  sheetPot = {id, k, edit: sheetPot && sheetPot.id === id ? sheetPot.edit : null}; bindPot(p);
+  const same = sheetPot && sheetPot.id === id;
+  sheetPot = {id, k, edit: same ? sheetPot.edit : null, cedit: same && sheetPot.k === k ? sheetPot.cedit : false}; bindPot(p);
+  const on = document.querySelector('#sheetBody .cyclechips [aria-pressed=true]');   // keep the chosen cycle in view
+  if (on) on.parentElement.scrollLeft = on.offsetLeft - on.parentElement.clientWidth / 2 + on.offsetWidth / 2;
 }
-function potHTML(p, k, editing) {
+function potHTML(p, k, editing, cedit) {
   // a row being edited turns into a small form in place
   const editRow = (cyc, d, label) => `<li class="editing"><form class="depedit" data-c="${cyc}" data-id="${esc(d.id)}" novalidate>
       <div class="two"><div><label>Date</label><input type="date" name="date" value="${esc(d.date)}"></div><div><label>${label}</label><input name="a" inputmode="decimal" value="${esc(d.a)}" class="amtin" style="font-size:20px"></div></div>
@@ -507,20 +510,25 @@ function potHTML(p, k, editing) {
       <button class="go" type="submit">Add</button></form>`;
   if (p.kind === 'td') {
     const cs = p.cycles || [];
-    if (!cs.length) return head + `<p class="muted">${esc(KIND.td)} · ${pct(p.rate)} p.a. · ${pct(p.tax ?? .2)} tax · ${p.cycleDays || 181}-day cycles</p><button class="go" data-act="cycle-new" data-p="${esc(p.id)}">Start the first cycle today</button>`;
+    const binHtml = (p.trash || []).length ? `<h2>Deleted cycles</h2><ul class="list deplist">${p.trash.map((x, i) => { const cc = tdCycle(p, x.cycle), left = Math.max(0, Math.ceil((Date.parse(x.at) + TRASH_DAYS * 864e5 - Date.now()) / 864e5)); return `<li><span class="t">${esc(fmtDate(x.cycle.start))} – ${esc(fmtDate(cc.end))}<small>${esc(peso(cc.closing))} at maturity · ${left} day${left === 1 ? '' : 's'} left</small></span><button class="ghost" data-act="cyc-restore" data-p="${esc(p.id)}" data-k="${i}">Restore</button><button class="x" data-act="cyc-forever" data-p="${esc(p.id)}" data-k="${i}" aria-label="Delete for good">×</button></li>`; }).join('')}</ul>` : '';
+    if (!cs.length) return head + `<p class="muted">${esc(KIND.td)} · ${pct(p.rate)} p.a. · ${pct(p.tax ?? .2)} tax · ${p.cycleDays || 181}-day cycles</p><button class="go" data-act="cycle-new" data-p="${esc(p.id)}">Start the first cycle today</button>` + binHtml;
     const c = tdCycle(p, cs[k]), last = k === cs.length - 1;
     return head + `<div class="chips cyclechips">${cs.map((x, i) => `<button class="chip" data-act="pot-cycle" data-p="${esc(p.id)}" data-k="${i}" aria-pressed="${i === k}">${esc(fmtDate(x.start, {month: 'short', year: 'numeric'}))}</button>`).join('')}</div>
       <div class="trio"><div class="tile"><span>Put in</span><b>${esc(pesoS(c.principal))}</b></div><div class="tile"><span>Interest</span><b class="up">+${esc(peso(c.interest, 2))}</b></div><div class="tile"><span>At maturity</span><b>${esc(pesoS(c.closing))}</b></div></div>
-      <p class="muted">${esc(fmtDate(cs[k].start))} – ${esc(fmtDate(c.end))} · ${pct(c.rate)} p.a. · ${pct(p.tax ?? .2)} tax · each deposit earns only for the days left</p>
+      ${cedit ? `<form id="cycF" class="depedit" novalidate><div class="two"><div><label for="cRate">Interest % per year</label><input id="cRate" inputmode="decimal" value="${(c.rate * 100).toFixed(3).replace(/\.?0+$/, '')}"></div><div><label for="cCarry">Carried over</label><input id="cCarry" inputmode="decimal" value="${esc(cs[k].carry || 0)}"></div></div>
+        <div class="two"><div><label for="cStart">Starts</label><input id="cStart" type="date" value="${esc(cs[k].start)}"></div><div><label for="cEnd">Ends</label><input id="cEnd" type="date" value="${esc(c.end)}"></div></div>
+        <div class="two" style="margin-top:10px"><button type="button" class="plain" data-act="cyc-cancel" style="margin:0">Cancel</button><button class="go" type="submit" style="margin:0">Save cycle</button></div>
+        <button type="button" class="danger" data-act="cyc-del" data-p="${esc(p.id)}">Delete this cycle</button></form>`
+      : `<button class="cycinfo" data-act="cyc-edit" data-p="${esc(p.id)}"><span>${esc(fmtDate(cs[k].start))} – ${esc(fmtDate(c.end))} · <b>${pct(c.rate)} p.a.</b> · ${pct(p.tax ?? .2)} tax · each deposit earns only for the days left</span><span class="ghost">Edit cycle</span></button>`}
       <div class="bar"><i style="width:${(c.prog * 100).toFixed(1)}%"></i></div>
       <ul class="list deplist">${c.items.map(it => {
         if (!it.carry && it.id === editing) return editRow(k, it, 'Deposit');
         const inner = `<span class="t">${it.carry ? 'Carried over' : esc(fmtDate(it.date))}<small>${it.days} days · +${esc(peso(it.net, 2))} interest${it.planned ? ' · planned' : ''}</small></span><span class="amtcol"><b class="amt">${esc(peso(it.a, 2))}</b><small>${esc(peso(it.bal, 2))}</small></span>`;
-        return `<li class="${it.planned ? 'planned' : ''}">${it.carry ? `<span class="rowbtn" style="cursor:default">${inner}</span><span class="x" aria-hidden="true"></span>` : rowBtn(k, it, inner) + delBtn(k, it)}</li>`;
+        return `<li class="${it.planned ? 'planned' : ''}">${it.carry ? `<button class="rowbtn depbtn" data-act="cyc-edit" data-p="${esc(p.id)}" aria-label="Edit carried-over amount and interest rate">${inner}</button><span class="x" aria-hidden="true"></span>` : rowBtn(k, it, inner) + delBtn(k, it)}</li>`;
       }).join('')}</ul>
-      <p class="muted">Tap a deposit to change its date or amount.</p>
+      <p class="muted">Tap a deposit to change its date or amount. Tap “Carried over” or the cycle line to change the interest rate.</p>
       ${addForm('Deposit')}
-      ${last ? `<button class="${c.done ? 'go' : 'plain'}" data-act="cycle-next" data-p="${esc(p.id)}">Start next cycle${c.done ? '' : ' early'} with ${esc(peso(c.closing, 2))}</button>` : ''}`;
+      ${last ? `<button class="${c.done ? 'go' : 'plain'}" data-act="cycle-next" data-p="${esc(p.id)}">Start next cycle${c.done ? '' : ' early'} with ${esc(peso(c.closing, 2))}</button>` : ''}${binHtml}`;
   }
   if (p.kind === 'mp2') {
     const m = mp2Calc(p), deps = [...(p.deposits || [])].sort((a, b) => b.date.localeCompare(a.date));
@@ -537,7 +545,16 @@ function potHTML(p, k, editing) {
     <ul class="list deplist">${[...b.txns].reverse().map(d => d.id === editing ? editRow(-1, d, 'Amount (− to withdraw)') : `<li>${rowBtn(-1, d, `<span class="t">${esc(fmtDate(d.date))}<small>${d.a < 0 ? 'withdrawal' : 'deposit'}</small></span><b class="amt ${d.a < 0 ? 'dn' : ''}">${esc(peso(d.a, 2))}</b>`)}${delBtn(-1, d)}</li>`).join('')}</ul>`;
 }
 function bindPot(p) {
-  const ef = document.querySelector('#sheetBody .depedit');
+  const cf = $('cycF');
+  if (cf) cf.addEventListener('submit', e => {
+    e.preventDefault();
+    const c = p.cycles[sheetPot.k], rate = parseFloat($('cRate').value) / 100, carry = parseAmt($('cCarry').value || '0'), st = $('cStart').value, en = $('cEnd').value;
+    const bad = isNaN(rate) || rate < 0 || isNaN(carry) || !st || !en || en <= st;
+    $('cRate').classList.toggle('bad', isNaN(rate) || rate < 0); $('cEnd').classList.toggle('bad', !en || en <= st); if (bad) return;
+    const old = {...c}; Object.assign(c, {rate, carry, start: st, end: en}); sheetPot.cedit = false; commit('meta');
+    toast(`Cycle saved · ${pct(rate)} p.a.`, () => { Object.assign(c, old); commit('meta'); });
+  });
+  const ef = document.querySelector('#sheetBody form.depedit:not(#cycF)');
   if (ef) {
     const amt = ef.querySelector('[name=a]'); amt.focus(); amt.select();
     ef.addEventListener('submit', e => {
@@ -579,7 +596,7 @@ function potForm(id) {
       <button class="go" type="submit">${id ? 'Save' : 'Add'}</button>
       ${id ? '<button type="button" class="danger" id="pDel">Delete this savings</button>' : ''}
     </form>`, () => {
-    const show = () => { const k = $('pKind').value; $('pTdW').hidden = k !== 'td'; $('pMp2W').hidden = k !== 'mp2'; $('pBasicW').hidden = k !== 'basic'; $('pTaxW').hidden = k === 'mp2'; $('pRateL').textContent = k === 'mp2' ? 'Dividend % per year' : 'Interest % per year'; if (!id && k === 'mp2' && $('pRate').value === '6') $('pRate').value = '7.12'; if (!id && k === 'basic' && $('pRate').value === '6') $('pRate').value = '3.5'; };
+    const show = () => { const k = $('pKind').value; $('pTdW').hidden = k !== 'td'; $('pMp2W').hidden = k !== 'mp2'; $('pBasicW').hidden = k !== 'basic'; $('pTaxW').hidden = k === 'mp2'; $('pRateL').textContent = k === 'mp2' ? 'Dividend % per year' : k === 'td' && id ? 'Interest % for new cycles' : 'Interest % per year'; if (!id && k === 'mp2' && $('pRate').value === '6') $('pRate').value = '7.12'; if (!id && k === 'basic' && $('pRate').value === '6') $('pRate').value = '3.5'; };
     $('pKind').addEventListener('change', show); show();
     $('potF').addEventListener('submit', e => {
       e.preventDefault();
@@ -610,6 +627,15 @@ function savingsAct(d) {
     case 'pot-cycle': if (sheetPot) sheetPot.edit = null; return potSheet(d.p, +d.k);
     case 'dep-edit': sheetPot.edit = d.id; return potSheet(d.p, sheetPot.k);
     case 'dep-cancel': sheetPot.edit = null; return potSheet(sheetPot.id, sheetPot.k);
+    case 'cyc-edit': sheetPot.cedit = true; sheetPot.edit = null; return potSheet(d.p, sheetPot.k);
+    case 'cyc-cancel': sheetPot.cedit = false; return potSheet(sheetPot.id, sheetPot.k);
+    case 'cyc-del': {
+      const k = sheetPot.k, [c] = p.cycles.splice(k, 1), item = {cycle: c, at: new Date().toISOString()};
+      (p.trash = p.trash || []).unshift(item); sheetPot.cedit = false; commit('meta'); potSheet(p.id, Math.min(k, p.cycles.length - 1));
+      toast(`${fmtDate(c.start, {month: 'short', year: 'numeric'})} cycle deleted`, () => restoreCycle(p, item)); return;
+    }
+    case 'cyc-restore': { const item = (p.trash || [])[+d.k]; if (item) restoreCycle(p, item); return; }
+    case 'cyc-forever': { const t = p.trash || [], k = +d.k, [item] = t.splice(k, 1); if (!item) return; commit('meta'); toast('Cycle deleted for good', () => { t.splice(k, 0, item); commit('meta'); }); return; }
     case 'cycle-new': { const st = todayIso(); p.cycles = [{start: st, end: addDays(st, p.cycleDays || 181), rate: p.rate, carry: 0, deposits: []}]; commit('meta'); return potSheet(p.id, 0); }
     case 'cycle-next': {
       const last = p.cycles[p.cycles.length - 1], c = tdCycle(p, last), st = c.end;
@@ -622,6 +648,17 @@ function savingsAct(d) {
       const [x] = list.splice(i, 1); commit('meta'); toast('Deposit deleted', () => { list.splice(i, 0, x); commit('meta'); }); return;
     }
   }
+}
+function restoreCycle(p, item) {
+  p.trash = (p.trash || []).filter(x => x !== item);
+  p.cycles = p.cycles || []; p.cycles.push(item.cycle); p.cycles.sort((a, b) => a.start.localeCompare(b.start));
+  commit('meta'); potSheet(p.id, p.cycles.indexOf(item.cycle));
+  toast(`${fmtDate(item.cycle.start, {month: 'short', year: 'numeric'})} cycle restored`);
+}
+function purgeCycleTrash() {
+  const cut = Date.now() - TRASH_DAYS * 864e5; let changed = false;
+  for (const p of (S.meta.savings || [])) if (p.trash && p.trash.length) { const keep = p.trash.filter(x => Date.parse(x.at) > cut); if (keep.length !== p.trash.length) { p.trash = keep; changed = true; } }
+  if (changed) { dirty.add('meta'); saveLocal(); }
 }
 function importSavingsFile(d) {
   const add = (d.savings || []).filter(p => p && p.kind && p.name);
@@ -1364,7 +1401,7 @@ document.addEventListener('click', e => {
     case 'imp-flip': if (imp) { imp.rows.forEach(r => { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; r.dup = isDup(r); }); renderReview(); } return;
     case 'imp-all': return importApply('all');
     case 'year-add': return addYear(d.y);
-    case 'pot-open': case 'pot-new': case 'pot-edit': case 'pot-cycle': case 'cycle-new': case 'cycle-next': case 'dep-del': case 'dep-edit': case 'dep-cancel': return savingsAct(d);
+    case 'pot-open': case 'pot-new': case 'pot-edit': case 'pot-cycle': case 'cycle-new': case 'cycle-next': case 'dep-del': case 'dep-edit': case 'dep-cancel': case 'cyc-edit': case 'cyc-cancel': case 'cyc-del': case 'cyc-restore': case 'cyc-forever': return savingsAct(d);
     case 'acct': return acctForm(j);
     case 'bill-pay': {
       const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta');
@@ -1430,7 +1467,7 @@ $('authForm').addEventListener('submit', async e => {
 
 async function start(u) {
   if (user && user.id === u.id) return;
-  user = u; loadLocal(); purgeTrash(); if (migrateSavings()) { dirty.add('meta'); saveLocal(); } showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
+  user = u; loadLocal(); purgeTrash(); purgeCycleTrash(); if (migrateSavings()) { dirty.add('meta'); saveLocal(); } showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
   await push(); await pull();
 }
 function stop(msg) { hideToast(); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }

@@ -220,3 +220,7 @@ textarea{width:100%;font:15px/1.4 Inter,system-ui,sans-serif;color:var(--ink);ba
 .deplist .depbtn:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}
 .deplist li.editing{display:block;border-bottom:1px solid var(--line);padding:4px 0 12px}
 .depedit{background:var(--card);border-radius:14px;padding:2px 12px 12px}.depedit input{background:var(--bg)}
+
+.cycinfo{display:flex;width:100%;text-align:left;align-items:center;gap:10px;color:var(--mute);font-size:13px;padding:6px 0;border-radius:10px;min-height:44px}
+.cycinfo b{color:var(--ink);font-weight:600}.cycinfo>span:first-child{flex:1}.cycinfo .ghost{flex:none;font-size:14px}
+.cycinfo:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}
