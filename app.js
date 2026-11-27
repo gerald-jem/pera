@@ -525,16 +525,34 @@ function quickPreview() {
   go.textContent = p.dates.length > 1 ? `Add ${p.dates.length} payments` : 'Add bill';
   return miss.length ? null : p;
 }
+/* the same bill already in Pera: same name, due within 10 days (apps move due dates a little) */
+function findBill(name, due, taken) {
+  const c = (S.meta.bills || []).filter(b => sameName(b.name, name) && b.due && !(taken && taken.has(b)));
+  return c.find(b => b.due === due) || c.map(b => ({b, d: Math.abs(dnum(b.due) - dnum(due)) / 864e5})).filter(x => x.d <= 10).sort((p, q) => p.d - q.d).map(x => x.b)[0] || null;
+}
+// add bills, or update the amount/date of ones you already have; returns a summary and an undo
+function putBills(name, items, extra) {
+  name = ((S.meta.bills || []).find(b => sameName(b.name, name)) || {name}).name;
+  const before = JSON.parse(JSON.stringify(S.meta.bills || [])), taken = new Set(), keys = new Set(['meta']), res = {added: 0, updated: 0, same: 0};
+  for (const it of items) {
+    const ex = findBill(name, it.due, taken);
+    if (ex) { taken.add(ex); if (Math.abs(+ex.a - it.a) < 0.005 && ex.due === it.due) res.same++; else { ex.a = it.a; ex.due = it.due; res.updated++; } }
+    else { const b = {name, a: it.a, due: it.due, paid: false, count: true, ...(extra || {})}; S.meta.bills.push(b); taken.add(b); res.added++; }
+    const m = billMonth(it.due); if (!S.years[m.y]) { ensureYear(m.y); keys.add('y' + m.y); }
+  }
+  res.keys = [...keys]; res.name = name;
+  res.msg = [res.added && `${res.added} ${name} ${res.added === 1 ? 'bill' : 'payments'} added`, res.updated && `${res.added ? '' : name + ': '}${res.updated} updated with the new amount`, !res.added && !res.updated && `${name} is already in Pera`].filter(Boolean).join(' · ');
+  res.undo = () => { S.meta.bills = before; commit('meta'); };
+  return res;
+}
 function quickAdd() {
   const p = quickPreview(); if (!p) return;
-  const made = p.dates.map(due => ({name: p.name, a: p.a, due, paid: false, count: true}));
-  const keys = ['meta'];
-  made.forEach(b => { S.meta.bills.push(b); const m = billMonth(b.due); if (!S.years[m.y]) { ensureYear(m.y); keys.push('y' + m.y); } });
-  commit(...keys);
+  const r = putBills(p.name, p.dates.map(due => ({a: p.a, due})));
+  commit(...r.keys);
   if (qbMode === 'type') $('qb').value = '';
   else { $('pkName').value = ''; $('pkAmt').value = ''; $('pkOther').value = ''; $('pkOther').hidden = true; $('pkN').value = '1'; }
   quickPreview();
-  toast(made.length > 1 ? `${made.length} ${p.name} payments added` : `${p.name} added`, () => { S.meta.bills = S.meta.bills.filter(b => !made.includes(b)); commit('meta'); });
+  toast(r.msg, r.undo);
 }
 /* ================= savings: time deposits with top-ups, MP2, plain savings accounts ================= */
 // meta.savings = [pot]
@@ -1356,10 +1374,9 @@ function entryForm(o) {
         let name = $('fbn').value === '__other' ? $('fbo').value.trim() : $('fbn').value;
         name = ((S.meta.bills || []).find(x => sameName(x.name, name)) || {name}).name;
         if (!name) { $('fbo').classList.add('bad'); return; }
-        const cnt = +$('fbN').value, d0 = new Date(dnum(dt)), made = [], keys = ['meta'];
-        for (let k = 0; k < cnt; k++) { const b = {name, a, due: iso(mkDate(d0.getFullYear(), d0.getMonth() + k, d0.getDate())), paid: false, count: true}; S.meta.bills.push(b); made.push(b); const bm = billMonth(b.due); if (!S.years[bm.y]) { ensureYear(bm.y); keys.push('y' + bm.y); } }
-        closeSheet(); commit(...keys);
-        toast(made.length > 1 ? `${made.length} ${name} payments added` : `${name} added`, () => { S.meta.bills = S.meta.bills.filter(b => !made.includes(b)); commit('meta'); }); return;
+        const cnt = +$('fbN').value, d0 = new Date(dnum(dt));
+        const r = putBills(name, Array.from({length: cnt}, (_, k) => ({a, due: iso(mkDate(d0.getFullYear(), d0.getMonth() + k, d0.getDate()))})));
+        closeSheet(); commit(...r.keys); toast(r.msg, r.undo); return;
       }
       if (o.edit) {   // may move to another month when the date changes
         const from = S.years[o.y][o.i], k = from[t].findIndex(z => z.id === o.id); if (k < 0) return closeSheet();
@@ -1447,7 +1464,8 @@ function billForm(j) {
       $('ba').classList.toggle('bad', isNaN(a)); $('bd').classList.toggle('bad', !d); $('bn').classList.toggle('bad', !n);
       if (isNaN(a) || !d || !n) return;
       const v = {name: n, a, due: d, paid: !!b.paid, count: $('bc').checked};
-      if (j == null) S.meta.bills.push(v); else S.meta.bills[j] = v;
+      if (j == null) { const r = putBills(n, [{a, due: d}], {count: v.count}); closeSheet(); commit(...r.keys); toast(r.msg, r.undo); return; }
+      S.meta.bills[j] = v;
       const keys = ['meta'];
       if (v.count) { const m = billMonth(d); if (!S.years[m.y]) { ensureYear(m.y); keys.push('y' + m.y); } }
       closeSheet(); commit(...keys);
@@ -1898,10 +1916,130 @@ async function pdfLines(buf, password) {
 
 /* ---- the import sheet ---- */
 let imp = null;   // {rows, source}
+/* ================= screenshots: read the text on this device, then turn it into bills or expenses ================= */
+let tessP = null;
+function loadTess() {
+  if (window.Tesseract) return Promise.resolve();
+  return tessP = tessP || new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'vendor/tess/tesseract.min.js'; sc.onload = res; sc.onerror = () => { tessP = null; rej(new Error('Couldn’t load the screenshot reader. Check your connection and try again.')); }; document.head.appendChild(sc); });
+}
+async function ocrImages(files, progress) {
+  await loadTess();
+  const base = new URL('vendor/tess/', location.href).href;
+  const w = await Tesseract.createWorker('eng', 1, {workerPath: base + 'worker.min.js', corePath: base, langPath: base, gzip: true, workerBlobURL: false,
+    logger: m => { if (m.status === 'recognizing text') progress(Math.round(m.progress * 100)); }});
+  const out = [];
+  try { for (const f of files) { const r = await w.recognize(f); out.push(r.data.text || ''); } } finally { w.terminate(); }
+  return out;
+}
+// amounts need centavos (₱1,570.90) so times and dates aren't mistaken for money; the ₱ is often read as P, $, £, # or r
+const SHOT_AMT = /(?:^|[\s(:])(?:[₱P$£#rRF€]\s?|PHP\s?)?(-?\d{1,3}(?:,\d{3})+\.\d{2}|-?\d+\.\d{2})(?![\d%])/g;
+const shotAmts = l => [...l.matchAll(SHOT_AMT)].map(m => parseFloat(m[1].replace(/,/g, '')));
+function shotDate(l) {
+  let m;
+  if ((m = new RegExp(`(${MRE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(20\\d{2})`, 'i').exec(l))) return iso(mkDate(+m[3], MON.indexOf(m[1].slice(0, 3).toLowerCase()), +m[2]));
+  if ((m = new RegExp(`(\\d{1,2})\\s+(${MRE})\\.?,?\\s+(20\\d{2})`, 'i').exec(l))) return iso(mkDate(+m[3], MON.indexOf(m[2].slice(0, 3).toLowerCase()), +m[1]));
+  if ((m = /(20\d{2})-(\d{1,2})-(\d{1,2})/.exec(l))) return iso(mkDate(+m[1], +m[2] - 1, +m[3]));
+  if ((m = /\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/.exec(l))) return iso(mkDate(+m[3], +m[1] - 1, +m[2]));
+  return null;
+}
+const SKIP_AMT = /total|payable|balance|limit|available|minimum|credit line|outstanding|savings|cashback|points|voucher/i;
+function shotBills(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean), used = new Set(), out = [];
+  lines.forEach((l, k) => {
+    if (!/\bdue\b/i.test(l)) return; const due = shotDate(l); if (!due) return;
+    let a = null;
+    const take = j => { if (j < 0 || j >= lines.length || used.has(j) || SKIP_AMT.test(lines[j])) return false; const v = shotAmts(lines[j]).filter(x => x > 0); if (!v.length) return false; if (j !== k && /\bdue\b/i.test(lines[j]) && shotDate(lines[j])) return false; a = v[v.length - 1]; used.add(j); return true; };
+    take(k) || take(k - 1) || take(k - 2) || take(k + 1);
+    if (a != null) out.push({due, a});
+  });
+  return out;
+}
+// a single payment / receipt screenshot (GCash, Maya, bank app)
+function shotReceipt(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const amtLine = lines.find(l => /amount|total|paid|sent|you (paid|sent)/i.test(l) && shotAmts(l).length && !SKIP_AMT.test(l.replace(/total amount/i, ''))) || null;
+  const all = lines.filter(l => !SKIP_AMT.test(l) || /total amount|amount paid/i.test(l)).flatMap(shotAmts).filter(x => x > 0);
+  const a = amtLine ? shotAmts(amtLine).pop() : all.length ? Math.max(...all) : NaN;
+  if (!(a > 0)) return null;
+  const date = lines.map(shotDate).find(Boolean) || todayIso();
+  let desc = '';
+  for (const l of lines) { const m = /(?:paid to|sent to|send to|transfer to|merchant|pay to|to)\s*[:\-]?\s*(.{3,40})/i.exec(l); if (m && !/\d{4,}/.test(m[1])) { desc = m[1].replace(/[>›]+$/, '').trim(); break; } }
+  const inc = /received|you got|cash ?in|refund/i.test(text) && !/paid|sent|payment/i.test(text);
+  return {date, a, desc: desc || 'Screenshot', dir: inc ? 'inc' : 'exp'};
+}
+// which bill is this? a name in the text, else the bill that's usually due on that day of the month
+function guessBillName(text, rows) {
+  const names = uniqNames([...(S.meta.bills || []).map(b => b.name), ...PRESETS]), lo = text.toLowerCase().replace(/\s+/g, '');
+  const hit = names.find(n => lo.includes(n.toLowerCase().replace(/\s+/g, ''))); if (hit) return hit;
+  if (/shopee|spaylater/i.test(text)) return 'SPayLater'; if (/lazada/i.test(text)) return 'Lazada PayLater'; if (/maya/i.test(text)) return 'Maya Black';
+  const day = rows.length ? new Date(dnum(rows[0].due)).getDate() : null, by = {};
+  (S.meta.bills || []).forEach(b => { if (b.due && new Date(dnum(b.due)).getDate() === day) by[b.name] = (by[b.name] || 0) + (b.due > rows[0].due.slice(0, 4) - 1 + '' ? 2 : 1); });
+  return Object.entries(by).sort((p, q) => q[1] - p[1]).map(x => x[0])[0] || '';
+}
+async function readShots(files, fail, busy) {
+  try {
+    busy('Reading screenshot… 0%');
+    const texts = await ocrImages(files, pct => busy(`Reading screenshot${files.length > 1 ? 's' : ''}… ${pct}%`));
+    busy('');
+    const bills = texts.flatMap(t => shotBills(t).map(r => ({...r, text: t})));
+    if (bills.length) return billShotReview(bills);
+    const rows = texts.flatMap(t => { const r = rowsFromLines(t.split(/\r?\n/)); if (r.length) return r; const one = shotReceipt(t); return one ? [one] : []; });
+    if (rows.length) return reviewRows(rows, 'screenshot');
+    fail('Couldn’t find amounts with dates in this screenshot. Make sure the amounts and dates are visible, or type it instead.');
+  } catch (e) { busy(''); fail(e.message || 'Couldn’t read this screenshot.'); }
+}
+let shot = null;   // {rows, name}
+function billShotReview(rows) {
+  const byText = {}; rows.forEach(r => { (byText[r.text] = byText[r.text] || []).push(r); });
+  const name = guessBillName(Object.keys(byText)[0], rows);
+  const seen = new Set(); rows = rows.filter(r => { const k = r.due + '|' + r.a; if (seen.has(k)) return false; seen.add(k); return true; }).sort((p, q) => p.due.localeCompare(q.due));
+  shot = {rows: rows.map(r => ({due: r.due, a: r.a, on: true})), name};
+  const names = uniqNames([...(S.meta.bills || []).slice().reverse().map(x => x.name), ...PRESETS]);
+  openSheet(`<div class="sheethead"><h2>Bills from screenshot</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    <label for="shName">Which bill is this?</label>
+    <select id="shName">${name ? '' : '<option value="">Choose…</option>'}${names.map(n => `<option ${sameName(n, name) ? 'selected' : ''}>${esc(n)}</option>`).join('')}<option value="__other">Other…</option></select>
+    <input id="shOther" maxlength="40" placeholder="Name of the bill" hidden style="margin-top:8px">
+    <p class="muted" id="shHint">${name ? 'Guessed from the due dates. Change it if it’s wrong.' : ''}</p>
+    <ul class="list implist" id="shList"></ul><p class="muted" id="shSum"></p>
+    <button class="go" id="shGo" data-act="shot-go"></button>`, () => {
+    $('shName').addEventListener('change', () => { $('shOther').hidden = $('shName').value !== '__other'; $('shHint').textContent = ''; renderShot(); });
+    $('shOther').addEventListener('input', renderShot);
+    renderShot();
+  });
+}
+const shotName = () => $('shName').value === '__other' ? $('shOther').value.trim() : $('shName').value;
+function renderShot() {
+  const nm = shotName(), bills = S.meta.bills || [];
+  const taken = new Set();
+  shot.rows.forEach(r => { const ex = nm ? findBill(nm, r.due, taken) : null; if (ex) taken.add(ex); r.ex = ex || null; r.st = !ex ? 'new' : Math.abs(+ex.a - r.a) < 0.005 && ex.due === r.due ? 'same' : 'update'; if (r.touched == null) r.on = r.st !== 'same'; });
+  $('shList').innerHTML = shot.rows.map((r, k) => `<li class="${r.on ? '' : 'off'}"><button class="chk ${r.on ? 'on' : ''}" data-act="shot-tog" data-k="${k}" aria-label="${r.on ? 'Skip' : 'Include'} bill due ${esc(fmtDate(r.due))}"><span>${r.on ? '✓' : ''}</span></button>
+    <span class="t">Due ${esc(fmtDate(r.due))}<small>${r.st === 'same' ? 'Already in Pera' : r.st === 'update' ? `Updates ${Math.abs(+r.ex.a - r.a) >= 0.005 ? `${esc(peso(+r.ex.a, 2))} → ${esc(peso(r.a, 2))}` : 'amount'}${r.ex.due !== r.due ? ` · due ${esc(fmtDate(r.ex.due, {month: 'short', day: 'numeric'}))} → ${esc(fmtDate(r.due, {month: 'short', day: 'numeric'}))}` : ''}${r.ex.paid ? ' · marked paid' : ''}` : (() => { const m = billMonth(r.due); return `New · counted in ${M[m.i].slice(0, 3)} ${m.y}`; })()}</small></span>
+    <span class="amt">${esc(peso(r.a, 2))}</span></li>`).join('');
+  const on = shot.rows.filter(r => r.on);
+  $('shSum').textContent = on.length ? `${on.length} bill${on.length === 1 ? '' : 's'} · ${peso(on.reduce((t, r) => t + r.a, 0), 2)}` : 'Nothing selected.';
+  $('shGo').textContent = !nm ? 'Choose which bill first' : !on.length && shot.rows.every(r => r.st === 'same') ? 'All already in Pera' : on.length ? `Save ${on.length} ${nm} bill${on.length === 1 ? '' : 's'}` : 'Save';
+  $('shGo').disabled = !nm || !on.length;
+}
+function saveShot() {
+  const nm = shotName(); if (!nm || !shot) return;
+  const r = putBills(nm, shot.rows.filter(x => x.on).map(x => ({a: x.a, due: x.due})));
+  shot = null; closeSheet(); commit(...r.keys); toast(r.msg, r.undo);
+}
+function scanPicker() {   // straight to the photo picker (Bills tab, Add sheet)
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+  inp.addEventListener('change', () => {
+    const files = [...inp.files]; if (!files.length) return;
+    openSheet(`<div class="sheethead"><h2>Reading screenshot</h2><button type="button" class="ghost" data-act="close">Cancel</button></div><p class="muted" id="scBusy">Starting…</p><div class="err" id="stErr"></div>`);
+    readShots(files, m => { const e = $('stErr'); if (e) e.textContent = m; const b = $('scBusy'); if (b) b.textContent = ''; }, m => { const b = $('scBusy'); if (b && m) b.textContent = m; });
+  });
+  inp.click();
+}
 function statementSheet() {
   openSheet(`<div class="sheethead"><h2>Import a statement</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
     <p class="muted">Works with Excel, PDF or CSV statements from your bank, GCash or Maya, including password-locked ones, or text you paste from transaction emails and texts. The file stays on this device; only rows you import are saved.</p>
     <label class="go filebtn" style="color:var(--on-blue);margin-top:8px">Choose Excel, PDF or CSV file<input type="file" id="stFile" accept=".csv,.pdf,.xlsx,.xls,.txt,text/csv,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"></label>
+    <label class="ghost filebtn shotbtn">Scan screenshots<input type="file" id="stShot" accept="image/*" multiple></label>
+    <p class="muted">Bill schedules (SPayLater, Lazada PayLater…), GCash or Maya receipts, transaction lists. Read on this device; the picture isn’t saved.</p>
     <div id="stPw" hidden><label for="stPass" id="stPwL">This file is locked. Enter its password</label><input id="stPass" type="password" autocomplete="off"><button class="go" type="button" id="stPwGo">Open</button>
       <p class="muted">Banks and e-wallets usually say what the password is in the email that came with the statement. It’s only used to open the file on this device and is never saved.</p></div>
     <label for="stPaste">Or paste transactions</label>
@@ -1937,12 +2075,14 @@ function statementSheet() {
     $('stFile').addEventListener('change', async e => {
       const f = e.target.files[0]; if (!f) return; fail('');
       const buf = new Uint8Array(await f.arrayBuffer());
+      if (/^image\//.test(f.type) || (buf[0] === 0x89 && buf[1] === 0x50) || (buf[0] === 0xFF && buf[1] === 0xD8)) return readShots([f], fail, busy);
       if (buf[0] === 0x25 && buf[1] === 0x50) return readPdf(buf);                               // %PDF
       if ((buf[0] === 0x50 && buf[1] === 0x4B) || (buf[0] === 0xD0 && buf[1] === 0xCF)) return readXlsx(buf);   // xlsx zip / locked
       const text = new TextDecoder().decode(buf);
       if (/\.csv$/i.test(f.name) || text.split('\n').slice(0, 8).some(l => (l.match(/[,;]/g) || []).length >= 2)) return mapCsv(parseCSV(text));
       const rows = rowsFromLines(text.split(/\r?\n/)); rows.length ? reviewRows(rows, 'file') : fail('No transactions found in this file.');
     });
+    $('stShot').addEventListener('change', e => { const f = [...e.target.files]; if (f.length) { fail(''); readShots(f, fail, busy); } });
     $('stPwGo').addEventListener('click', () => { if (!pending) return; const {kind, buf} = pending; kind === 'pdf' ? readPdf(buf, $('stPass').value) : readXlsx(buf, $('stPass').value); });
     $('stPass').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('stPwGo').click(); } });
     $('stPasteGo').addEventListener('click', () => {
@@ -2120,6 +2260,9 @@ document.addEventListener('click', e => {
     case 'imp-all-on': if (imp) { imp.rows.forEach(r => { r.on = true; }); renderReview(); } return;
     case 'imp-all-off': if (imp) { imp.rows.forEach(r => { r.on = false; }); renderReview(); } return;
     case 'imp-go': return importRows();
+    case 'shot-go': return saveShot();
+    case 'shot-tog': { const r = shot && shot.rows[+d.k]; if (r) { r.on = !r.on; r.touched = true; renderShot(); } return; }
+    case 'scan': return scanPicker();
     case 'imp-flip': if (imp) { imp.rows.forEach(r => { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; }); markDups(imp.rows); imp.rows.forEach(r => { r.on = !r.dup || r.dup === 'maybe'; }); renderReview(); } return;
     case 'imp-all': return importApply('all');
     case 'year-add': return addYear(d.y);

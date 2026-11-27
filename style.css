@@ -341,3 +341,9 @@ label small.muted{font-weight:400}
 .gtable tr.ok td{background:color-mix(in srgb,var(--blue) 9%,transparent)}
 .row2{display:flex;gap:8px;margin-top:12px}.row2 .ghost{flex:1}
 .gform{margin-top:16px;border-top:1px solid var(--line);padding-top:8px}
+
+.shotbtn{display:flex;align-items:center;justify-content:center;margin-top:8px;border:1px solid var(--line);border-radius:12px;min-height:48px;cursor:pointer;position:relative}
+.shotbtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+
+.scanbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:46px;margin-top:8px;border:1px dashed var(--line);border-radius:12px;background:none;color:var(--blue);font-size:15px;cursor:pointer}
+.scanbtn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
