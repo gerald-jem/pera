@@ -481,7 +481,9 @@ function renderSavings() {
   w.innerHTML = `<div class="savtotal"><div class="muted">In savings now</div><div class="big" style="font-size:clamp(34px,10vw,44px)">${esc(peso(total, 2))}</div>
       <p class="muted">Deposits here show as each month’s <b>Saved</b> in Months, but aren’t subtracted from total money — the transfer already shows as money out in your imported statement.</p></div>
     <div class="potgrid">${ps.map(card).join('') || '<p class="empty">No savings yet. Add your Maya time deposit, MP2 or a savings account, or import the Maya file from your spreadsheet in Settings.</p>'}</div>
-    <button class="go" data-act="pot-new">Add savings</button>`;
+    <button class="go" data-act="pot-new">Add savings</button>
+    ${forecastHTML()}`;
+  const fcs = $('fcChart'); if (fcs) { fcRO.disconnect(); fcRO.observe(fcs); drawForecast(); }
 }
 
 /* ---- pot sheet ---- */
@@ -490,14 +492,15 @@ function potSheet(id, k) {
   const p = potById(id); if (!p) return closeSheet();
   if (p.kind === 'td') k = k == null || k >= (p.cycles || []).length ? tdCurrent(p) : Math.max(0, k);
   const editing = sheetPot && sheetPot.id === id ? sheetPot.edit : null;
-  const html = potHTML(p, k, editing, sheetPot && sheetPot.id === id && sheetPot.k === k && sheetPot.cedit);
+  const keep = sheetPot && sheetPot.id === id;
+  const html = potHTML(p, k, editing, keep && sheetPot.k === k && sheetPot.cedit, keep && sheetPot.fedit, keep ? sheetPot.frate : null);
   if (sheetOpen && sheetPot && sheetPot.id === id) $('sheetBody').innerHTML = html; else openSheet(html);
   const same = sheetPot && sheetPot.id === id;
-  sheetPot = {id, k, edit: same ? sheetPot.edit : null, cedit: same && sheetPot.k === k ? sheetPot.cedit : false}; bindPot(p);
+  sheetPot = {id, k, edit: same ? sheetPot.edit : null, cedit: same && sheetPot.k === k ? sheetPot.cedit : false, fedit: same ? sheetPot.fedit : false, frate: same ? sheetPot.frate : null}; bindPot(p);
   const on = document.querySelector('#sheetBody .cyclechips [aria-pressed=true]');   // keep the chosen cycle in view
   if (on) on.parentElement.scrollLeft = on.offsetLeft - on.parentElement.clientWidth / 2 + on.offsetWidth / 2;
 }
-function potHTML(p, k, editing, cedit) {
+function potHTML(p, k, editing, cedit, fedit, frate) {
   // a row being edited turns into a small form in place
   const editRow = (cyc, d, label) => `<li class="editing"><form class="depedit" data-c="${cyc}" data-id="${esc(d.id)}" novalidate>
       <div class="two"><div><label>Date</label><input type="date" name="date" value="${esc(d.date)}"></div><div><label>${label}</label><input name="a" inputmode="decimal" value="${esc(d.a)}" class="amtin" style="font-size:20px"></div></div>
@@ -528,7 +531,8 @@ function potHTML(p, k, editing, cedit) {
       }).join('')}</ul>
       <p class="muted">Tap a deposit to change its date or amount. Tap “Carried over” or the cycle line to change the interest rate.</p>
       ${addForm('Deposit')}
-      ${last ? `<button class="${c.done ? 'go' : 'plain'}" data-act="cycle-next" data-p="${esc(p.id)}">Start next cycle${c.done ? '' : ' early'} with ${esc(peso(c.closing, 2))}</button>` : ''}${binHtml}`;
+      ${last ? `<button class="${c.done ? 'go' : 'plain'}" data-act="cycle-next" data-p="${esc(p.id)}">Start next cycle${c.done ? '' : ' early'} with ${esc(peso(c.closing, 2))}</button>` : ''}
+      ${tdForecastHTML(p, fedit, frate)}${binHtml}`;
   }
   if (p.kind === 'mp2') {
     const m = mp2Calc(p), deps = [...(p.deposits || [])].sort((a, b) => b.date.localeCompare(a.date));
@@ -545,6 +549,22 @@ function potHTML(p, k, editing, cedit) {
     <ul class="list deplist">${[...b.txns].reverse().map(d => d.id === editing ? editRow(-1, d, 'Amount (− to withdraw)') : `<li>${rowBtn(-1, d, `<span class="t">${esc(fmtDate(d.date))}<small>${d.a < 0 ? 'withdrawal' : 'deposit'}</small></span><b class="amt ${d.a < 0 ? 'dn' : ''}">${esc(peso(d.a, 2))}</b>`)}${delBtn(-1, d)}</li>`).join('')}</ul>`;
 }
 function bindPot(p) {
+  const pf = $('planF');
+  if (pf) pf.addEventListener('submit', e => {
+    e.preventDefault();
+    const a = parseAmt($('plA').value || '0'), st = +$('plS').value, r = parseFloat($('plR').value) / 100, cd = +$('plD').value;
+    const bad = isNaN(a) || a < 0 || !(st >= 1) || isNaN(r) || !(cd >= 7);
+    ['plA', 'plS', 'plR', 'plD'].forEach(i => $(i).classList.toggle('bad', bad)); if (bad) return;
+    const old = p.plan ? JSON.parse(JSON.stringify(p.plan)) : null;
+    p.plan = {...planOf(p), amount: a, step: st, rate: r, cycleDays: cd, cycles: +$('plN').value};
+    sheetPot.fedit = false; commit('meta');
+    toast('Forecast plan saved', () => { p.plan = old; commit('meta'); });
+  });
+  const rf = $('fcRateF');
+  if (rf) { $('fcR').focus(); $('fcR').select(); rf.addEventListener('submit', e => {
+    e.preventDefault(); const r = parseFloat($('fcR').value) / 100; $('fcR').classList.toggle('bad', isNaN(r)); if (isNaN(r)) return;
+    p.plan = {...planOf(p)}; p.plan.rates = {...(p.plan.rates || {}), [+rf.dataset.i]: r}; sheetPot.frate = null; commit('meta');
+  }); }
   const cf = $('cycF');
   if (cf) cf.addEventListener('submit', e => {
     e.preventDefault();
@@ -554,7 +574,7 @@ function bindPot(p) {
     const old = {...c}; Object.assign(c, {rate, carry, start: st, end: en}); sheetPot.cedit = false; commit('meta');
     toast(`Cycle saved · ${pct(rate)} p.a.`, () => { Object.assign(c, old); commit('meta'); });
   });
-  const ef = document.querySelector('#sheetBody form.depedit:not(#cycF)');
+  const ef = document.querySelector('#sheetBody form.depedit:not(#cycF):not(#planF):not(#fcRateF)');
   if (ef) {
     const amt = ef.querySelector('[name=a]'); amt.focus(); amt.select();
     ef.addEventListener('submit', e => {
@@ -627,6 +647,11 @@ function savingsAct(d) {
     case 'pot-cycle': if (sheetPot) sheetPot.edit = null; return potSheet(d.p, +d.k);
     case 'dep-edit': sheetPot.edit = d.id; return potSheet(d.p, sheetPot.k);
     case 'dep-cancel': sheetPot.edit = null; return potSheet(sheetPot.id, sheetPot.k);
+    case 'plan-edit': sheetPot.fedit = true; sheetPot.frate = null; return potSheet(d.p, sheetPot.k);
+    case 'plan-cancel': sheetPot.fedit = false; return potSheet(sheetPot.id, sheetPot.k);
+    case 'fc-rate': sheetPot.frate = +d.i; sheetPot.fedit = false; return potSheet(d.p, sheetPot.k);
+    case 'fc-rate-cancel': sheetPot.frate = null; return potSheet(sheetPot.id, sheetPot.k);
+    case 'fc-rate-reset': { const q = potById(sheetPot.id), plan = q.plan = q.plan || {}; plan.rates = {...(plan.rates || {})}; delete plan.rates[+d.i]; sheetPot.frate = null; commit('meta'); return; }
     case 'cyc-edit': sheetPot.cedit = true; sheetPot.edit = null; return potSheet(d.p, sheetPot.k);
     case 'cyc-cancel': sheetPot.cedit = false; return potSheet(sheetPot.id, sheetPot.k);
     case 'cyc-del': {
@@ -667,6 +692,89 @@ function importSavingsFile(d) {
   add.forEach(p => { const i = pots().findIndex(x => x.id === p.id || x.name === p.name); if (i >= 0) pots()[i] = p; else pots().push(p); });
   closeSheet(); commit('meta'); showView('savings');
   toast(`Added ${add.map(p => p.name).join(', ')}`, () => { S.meta.savings = before; commit('meta'); });
+}
+
+/* ================= savings forecast ================= */
+// td pots carry a plan: {amount, step (days between deposits), cycleDays, rate, cycles (how many ahead), rates: {start: rate}}
+const defaultPlan = p => {
+  const cs = p.cycles || [], last = cs[cs.length - 1], deps = last ? (last.deposits || []) : [];
+  const amount = deps.length ? deps[deps.length - 1].a : 10000;
+  return {amount, step: 15, cycleDays: p.cycleDays || 181, rate: p.rate, cycles: 6, rates: {}};
+};
+const planOf = p => Object.assign(defaultPlan(p), p.plan || {});
+function tdForecast(p) {
+  const cs = p.cycles || []; if (!cs.length) return [];
+  const plan = planOf(p), out = [];
+  let prev = tdCycle(p, cs[cs.length - 1]), start = prev.end, close = prev.closing;
+  for (let i = 0; i < plan.cycles; i++) {
+    const end = addDays(start, plan.cycleDays), deposits = [];
+    for (let k = 1; k * plan.step < plan.cycleDays; k++) if (plan.amount > 0) deposits.push({id: 'f' + i + '-' + k, date: addDays(start, k * plan.step), a: plan.amount});
+    const rate = plan.rates && plan.rates[i] != null ? plan.rates[i] : plan.rate;
+    const c = {start, end, rate, carry: Math.round(close * 100) / 100, deposits}, cc = tdCycle(p, c);
+    out.push({...c, i, own: plan.rates && plan.rates[i] != null, put: cc.principal - c.carry, interest: cc.interest, closing: cc.closing});
+    close = cc.closing; start = end;
+  }
+  return out;
+}
+// value of one pot on a given date (interest of a time deposit counts when its cycle ends)
+function potValueAt(p, d) {
+  if (p.kind === 'td') {
+    const all = [...(p.cycles || []), ...tdForecast(p)];
+    if (!all.length) return 0;
+    for (const c of all) { const end = c.end || addDays(c.start, p.cycleDays || 181); if (d >= c.start && d < end) return +c.carry + (c.deposits || []).filter(x => x.date <= d).reduce((s, x) => s + x.a, 0); }
+    const last = all[all.length - 1]; return d < all[0].start ? 0 : (last.closing ?? tdCycle(p, last).closing);
+  }
+  if (p.kind === 'mp2') {
+    const m = mp2Calc(p); if (!m.maturity) return 0;
+    if (d >= m.maturity) return m.atMaturity;
+    const deps = (p.deposits || []).filter(x => x.date <= d).reduce((s, x) => s + x.a, 0);
+    const divs = p.payout === 'annual' ? 0 : m.years.filter(r => `${r.y}-12-31` <= d).reduce((s, r) => s + r.div, 0);
+    return deps + divs;
+  }
+  const b = basicCalc(p), t = todayIso(); if (d <= t) return b.now;
+  return b.now * Math.pow(1 + (p.rate || 0) * (1 - (p.tax ?? 0.2)) / 365, daysBetween(t, d));
+}
+let fcYears = +(store.get('pera:fcYears') || 3);
+function forecastHTML() {
+  const ps = pots(); if (!ps.length) return '';
+  const t = today(), months = fcYears * 12, pts = [];
+  for (let k = 0; k <= months; k++) { const d = iso(new Date(t.getFullYear(), t.getMonth() + k + (k ? 1 : 0), k ? 0 : t.getDate())); pts.push({d, v: ps.reduce((s, p) => s + potValueAt(p, d), 0)}); }
+  const yearEnds = []; for (let y = t.getFullYear(); y <= t.getFullYear() + fcYears; y++) { const d = `${y}-12-31`; if (d >= todayIso() && d <= pts[pts.length - 1].d) yearEnds.push({y, d, by: ps.map(p => ({p, v: potValueAt(p, d)})), v: ps.reduce((s, p) => s + potValueAt(p, d), 0)}); }
+  const endV = pts[pts.length - 1].v;
+  window.__fc = pts;
+  return `<div class="card fccard"><div class="fchead"><div><div class="muted">Forecast · all savings</div><div class="serif" style="font-size:26px">${esc(peso(endV))}</div><div class="muted">by ${esc(fmtDate(pts[pts.length - 1].d, {month: 'short', year: 'numeric'}))} if you keep your plans</div></div>
+      <div class="seg fcseg">${[1, 2, 3, 5].map(n => `<button data-act="fc-years" data-n="${n}" aria-pressed="${n === fcYears}">${n}y</button>`).join('')}</div></div>
+    <div class="fig" style="height:200px"><svg id="fcChart" role="img" aria-label="Forecast of total savings"></svg></div>
+    <table class="ytable"><thead><tr><th>End of</th>${ps.map(p => `<th>${esc(p.name.split(' ')[0])}</th>`).join('')}<th>Total</th></tr></thead><tbody>
+      ${yearEnds.map(r => `<tr><td>${r.y}</td>${r.by.map(x => `<td>${esc(pesoS(x.v))}</td>`).join('')}<td><b>${esc(pesoS(r.v))}</b></td></tr>`).join('')}</tbody></table>
+    <p class="muted">Uses each time deposit’s deposit plan, MP2’s planned contributions and current dividend rate, and savings-account interest. Tap an account to change its plan.</p></div>`;
+}
+function drawForecast() {
+  const s = $('fcChart'); if (!s || !window.__fc) return; const W = s.clientWidth, H = s.clientHeight; if (!W) return;
+  const pts = window.__fc, hi = Math.max(1, ...pts.map(p => p.v)) * 1.08, pl = 4, pr = 4, pt = 16, pb = 20;
+  const X = i => pl + i * (W - pl - pr) / (pts.length - 1), Y = v => pt + (hi - v) * (H - pt - pb) / hi;
+  const line = pts.map((p, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p.v).toFixed(1)).join('');
+  const yrs = pts.map((p, i) => [p, i]).filter(([p], i) => i && p.d.slice(5, 7) === '01').map(([p, i]) => `<line x1="${X(i)}" x2="${X(i)}" y1="${pt}" y2="${H - pb}" stroke="var(--line)"/><text x="${X(i) + 3}" y="${H - 5}" font-size="11" fill="var(--mute)">${p.d.slice(0, 4)}</text>`).join('');
+  s.innerHTML = `${yrs}<path d="${line}L${X(pts.length - 1)} ${H - pb}L${X(0)} ${H - pb}Z" fill="var(--blue)" opacity=".12"/><path d="${line}" fill="none" stroke="var(--blue)" stroke-width="2.5" stroke-linejoin="round"/>
+    <circle cx="${X(0)}" cy="${Y(pts[0].v)}" r="4" fill="var(--bg)" stroke="var(--blue)" stroke-width="2"/><text x="${X(0) + 8}" y="${Math.max(12, Y(pts[0].v) - 8)}" font-size="11" fill="var(--ink)">Now</text>`;
+}
+const fcRO = new ResizeObserver(drawForecast);
+// forecast section inside a time-deposit sheet
+function tdForecastHTML(p, fedit, frate) {
+  const plan = planOf(p), fc = tdForecast(p), cs = p.cycles || [];
+  const all = [...cs.map(c => ({start: c.start, end: tdCycle(p, c).end, closing: tdCycle(p, c).closing, actual: true})), ...fc];
+  const max = Math.max(1, ...all.map(x => x.closing));
+  return `<h2>Forecast</h2>
+    ${fedit ? `<form id="planF" class="depedit" novalidate>
+      <div class="two"><div><label for="plA">Deposit each time</label><input id="plA" inputmode="decimal" value="${esc(plan.amount)}"></div><div><label for="plS">Every (days)</label><input id="plS" inputmode="numeric" value="${esc(plan.step)}"></div></div>
+      <div class="two"><div><label for="plR">Interest % for future cycles</label><input id="plR" inputmode="decimal" value="${(plan.rate * 100).toFixed(3).replace(/\.?0+$/, '')}"></div><div><label for="plD">Cycle length (days)</label><input id="plD" inputmode="numeric" value="${esc(plan.cycleDays)}"></div></div>
+      <label for="plN">Cycles to forecast</label><select id="plN">${[1, 2, 3, 4, 6, 8, 10, 12].map(n => `<option ${n === plan.cycles ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <div class="two" style="margin-top:10px"><button type="button" class="plain" data-act="plan-cancel" style="margin:0">Cancel</button><button class="go" type="submit" style="margin:0">Save plan</button></div></form>`
+    : `<button class="cycinfo" data-act="plan-edit" data-p="${esc(p.id)}"><span>Plan: <b>${esc(peso(plan.amount))}</b> every ${plan.step} days · <b>${pct(plan.rate)}</b> p.a. · ${plan.cycleDays}-day cycles · ${plan.cycles} cycles ahead</span><span class="ghost">Edit plan</span></button>`}
+    <div class="ladder">${all.map(x => `<div class="r ${x.actual ? '' : 'f'}"><span>${esc(fmtDate(x.end, {month: 'short', year: 'numeric'}))}</span><i style="width:${(x.closing / max * 100).toFixed(1)}%"></i><span>${esc(pesoS(x.closing))}</span></div>`).join('')}</div>
+    <p class="muted">Solid = your cycles, faded = forecast. Tap a forecast cycle to change just its rate.</p>
+    <ul class="list deplist">${fc.map((c, i) => frate === i ? `<li class="editing"><form id="fcRateF" class="depedit" data-i="${i}" novalidate><label for="fcR">Interest % for the ${esc(fmtDate(c.start, {month: 'short', year: 'numeric'}))} cycle</label><input id="fcR" inputmode="decimal" value="${(c.rate * 100).toFixed(3).replace(/\.?0+$/, '')}">
+      <div class="two" style="margin-top:8px"><button type="button" class="plain" data-act="${c.own ? 'fc-rate-reset' : 'fc-rate-cancel'}" data-i="${i}" style="margin:0">${c.own ? 'Use plan rate' : 'Cancel'}</button><button class="go" type="submit" style="margin:0">Save</button></div></form></li>` : `<li><button class="rowbtn depbtn" data-act="fc-rate" data-p="${esc(p.id)}" data-i="${i}"><span class="t">${esc(fmtDate(c.start, {month: 'short', year: 'numeric'}))} – ${esc(fmtDate(c.end, {month: 'short', year: 'numeric'}))}<small>${pct(c.rate)}${c.own ? ' (own rate)' : ''} · +${esc(peso(c.put))} put in · +${esc(peso(c.interest, 2))} interest</small></span><span class="amtcol"><b class="amt">${esc(peso(c.closing, 2))}</b><small>at maturity</small></span></button></li>`).join('')}</ul>`;
 }
 
 /* ================= sheet + toast ================= */
@@ -1410,7 +1518,8 @@ document.addEventListener('click', e => {
     case 'imp-flip': if (imp) { imp.rows.forEach(r => { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; r.dup = isDup(r); }); renderReview(); } return;
     case 'imp-all': return importApply('all');
     case 'year-add': return addYear(d.y);
-    case 'pot-open': case 'pot-new': case 'pot-edit': case 'pot-cycle': case 'cycle-new': case 'cycle-next': case 'dep-del': case 'dep-edit': case 'dep-cancel': case 'cyc-edit': case 'cyc-cancel': case 'cyc-del': case 'cyc-restore': case 'cyc-forever': return savingsAct(d);
+    case 'pot-open': case 'pot-new': case 'pot-edit': case 'pot-cycle': case 'cycle-new': case 'cycle-next': case 'dep-del': case 'dep-edit': case 'dep-cancel': case 'cyc-edit': case 'cyc-cancel': case 'cyc-del': case 'cyc-restore': case 'cyc-forever': case 'plan-edit': case 'plan-cancel': case 'fc-rate': case 'fc-rate-cancel': case 'fc-rate-reset': return savingsAct(d);
+    case 'fc-years': fcYears = +d.n; store.set('pera:fcYears', fcYears); renderSavings(); return;
     case 'acct': return acctForm(j);
     case 'bill-pay': {
       const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta');

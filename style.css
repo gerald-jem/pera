@@ -238,3 +238,11 @@ html.applock #mainView,html.applock .tabs,html.applock .sheet,html.applock .toas
 .switch{position:relative;width:52px;height:32px;border-radius:16px;background:var(--line);flex:none;transition:background .2s}
 .switch::after{content:'';position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0004;transition:transform .2s}
 .switch[aria-checked=true]{background:var(--blue)}.switch[aria-checked=true]::after{transform:translateX(20px)}
+
+/* ===== forecast ===== */
+.fccard{margin-top:18px}
+.fchead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.fcseg{flex:none}.fcseg button{min-height:36px;padding:0 12px}
+.fccard .ytable th,.fccard .ytable td{white-space:nowrap}
+.fccard .ytable{display:block;overflow-x:auto}
+.ladder .r{display:grid;grid-template-columns:5.6em minmax(0,1fr) 5.4em;gap:8px;align-items:center;font-size:13px;padding:5px 0}
