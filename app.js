@@ -23,7 +23,7 @@ const store = {
 const today = () => new Date();
 // a bill is repaid from the month BEFORE its due date (due Jan 5, 2027 → December 2026)
 const billMonth = due => { const d = new Date(due + 'T00:00:00'); d.setDate(1); d.setMonth(d.getMonth() - 1); return {y: String(d.getFullYear()), i: d.getMonth()}; };
-const billsIn = (y, i) => (S.meta.bills || []).map((b, j) => ({...b, j})).filter(b => b.count !== false && b.due && (m => m.y === y && m.i === i)(billMonth(b.due)));
+const billsIn = (y, i) => (S.meta.bills || []).map((b, j) => ({...b, j})).filter(b => b.count !== false && !b.paid && b.due && (m => m.y === y && m.i === i)(billMonth(b.due)));
 
 /* ================= state ================= */
 const cfg = window.PERA_CONFIG || {};
@@ -175,7 +175,7 @@ function entryRows(y, i) {
       <span class="amt ${inc ? 'up' : ''}">${inc ? '+' : x.a < 0 ? '+' : '−'}${esc(peso(Math.abs(x.a), 2))}</span></button>
       <button class="x" data-act="entry-del" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}" aria-label="Delete ${esc(x.n || (inc ? 'income' : 'expense'))}">×</button></li>`;
   }).join('');
-  h += billsIn(y, i).map(b => `<li><button class="rowbtn" data-act="bill-edit" data-j="${b.j}"><span class="dot e">↑</span><span class="t">${esc(b.name)}<small>Bill due ${esc(fmtDate(b.due))}${b.paid ? ' · paid' : ''}</small></span><span class="amt">−${esc(peso(+b.a, 2))}</span></button><span class="x" aria-hidden="true"></span></li>`).join('');
+  h += billsIn(y, i).map(b => `<li><button class="rowbtn" data-act="bill-edit" data-j="${b.j}"><span class="dot e">↑</span><span class="t">${esc(b.name)}<small>Bill due ${esc(fmtDate(b.due))}</small></span><span class="amt">−${esc(peso(+b.a, 2))}</span></button><span class="x" aria-hidden="true"></span></li>`).join('');
   if (+m.sav) h += `<li><button class="rowbtn" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}"><span class="dot s">₱</span><span class="t">To savings<small>Moved out of total</small></span><span class="amt">${esc(peso(+m.sav, 2))}</span></button>
       <button class="x" data-act="sav-del" data-y="${esc(y)}" data-i="${i}" aria-label="Remove savings for ${M[i]}">×</button></li>`;
   return h;
@@ -256,7 +256,7 @@ function renderBills() {
   $('billList').innerHTML = b.map(x => {
     const late = !x.paid && Date.parse(x.due + 'T00:00:00') < now.getTime();
     return `<li><button class="chk ${x.paid ? 'on' : ''}" data-act="bill-pay" data-j="${x.j}" aria-label="${x.paid ? 'Mark unpaid' : 'Mark paid'}: ${esc(x.name)}"><span>${x.paid ? '✓' : ''}</span></button>
-      <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(x.name)}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid · ' : late ? 'Past due · ' : 'Due '}${esc(fmtDate(x.due))}${x.count !== false ? ` · expense in ${M[billMonth(x.due).i].slice(0, 3)} ${billMonth(x.due).y}` : ''}</small></span>
+      <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(x.name)}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid · ' : late ? 'Past due · ' : 'Due '}${esc(fmtDate(x.due))}${x.count === false ? '' : x.paid ? ' · not counted as expense' : ` · expense in ${M[billMonth(x.due).i].slice(0, 3)} ${billMonth(x.due).y}`}</small></span>
       <span class="amt" style="${x.paid ? 'opacity:.5;text-decoration:line-through' : ''}">${esc(peso(+x.a, 2))}</span></button>
       <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete ${esc(x.name)}">×</button></li>`;
   }).join('') || '<li class="empty">No bills yet. Type one above.</li>';
@@ -510,6 +510,7 @@ function billForm(j) {
     <label for="ba">Amount</label><input id="ba" class="amtin" inputmode="decimal" value="${esc(b.a)}">
     <label for="bd">Due date</label><input id="bd" type="date" value="${esc(b.due)}">
     <label class="check"><input type="checkbox" id="bc" ${b.count !== false ? 'checked' : ''}><span id="bcl">${esc(countLabel(b.due))}</span></label>
+    <p class="muted" style="margin:4px 0 0 34px">Stops counting once you mark it paid, so the payment from your statement isn’t counted twice.</p>
     <button class="go" type="submit">${j == null ? 'Add' : 'Save'}</button>
     ${j == null ? '' : '<button type="button" class="danger" id="bdel">Delete bill</button>'}</form>`, () => {
     $('bd').addEventListener('input', () => { $('bcl').textContent = countLabel($('bd').value); });
@@ -1123,7 +1124,11 @@ document.addEventListener('click', e => {
     case 'imp-all': return importApply('all');
     case 'year-add': return addYear(d.y);
     case 'acct': return acctForm(j);
-    case 'bill-pay': { const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta'); return; }
+    case 'bill-pay': {
+      const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta');
+      if (b.count !== false && b.due) { const m = billMonth(b.due); toast(b.paid ? `${b.name} paid · no longer counted in ${M[m.i].slice(0, 3)} ${m.y}` : `${b.name} unpaid · counted in ${M[m.i].slice(0, 3)} ${m.y} again`); }
+      return;
+    }
     case 'bill-edit': return billForm(+j);
     case 'bill-del': return removeBill(+j);
     case 'bill-add': return billForm(null);
