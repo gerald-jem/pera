@@ -198,3 +198,20 @@ textarea{width:100%;font:15px/1.4 Inter,system-ui,sans-serif;color:var(--ink);ba
 .big.masked{letter-spacing:.04em}
 .totbtn{text-align:left;font-family:Literata,Georgia,serif;font-weight:600;line-height:1.05;min-height:0;border-radius:8px;cursor:pointer;-webkit-user-select:none;user-select:none}
 .totbtn:active{opacity:.7}
+
+/* ===== savings ===== */
+.savtotal{margin-bottom:12px}.savtotal p{margin:6px 0 0}
+.potgrid{display:grid;gap:12px;margin:14px 0}.potcard{margin:0}
+.potcard:hover{outline:1px solid var(--line)}
+.cyclechips{margin:4px 0 10px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}.cyclechips .chip{flex:none}
+.cyclechips .chip[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:var(--on-blue);font-weight:600}
+.deplist li{gap:8px;min-height:56px;padding:6px 0}
+.deplist .t{flex:1;font-size:15px}.deplist .t small{display:block;color:var(--mute);font-size:12px}
+.deplist .amtcol{text-align:right}.deplist .amtcol small{display:block;color:var(--mute);font-size:12px;font-variant-numeric:tabular-nums}
+.deplist li.planned{opacity:.55}
+.depform{background:var(--card);border-radius:14px;padding:2px 12px 12px;margin:12px 0}
+.depform input,.depform select{background:var(--bg)}
+.ytable{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0 4px;font-variant-numeric:tabular-nums}
+.ytable th{font-weight:500;color:var(--mute);font-size:12px;text-align:right;padding:6px 4px}.ytable th:first-child,.ytable td:first-child{text-align:left}
+.ytable td{text-align:right;padding:7px 4px;border-top:1px solid var(--line)}.ytable tr.est td{color:var(--mute)}
+@media (min-width:900px){.potgrid{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}#v-savings>#savWrap>.go{width:auto;padding:0 28px}.sheet:has(.potsheet){width:min(640px,92vw);max-height:88vh}}

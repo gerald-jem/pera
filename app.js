@@ -80,6 +80,7 @@ async function pull() {
     for (const y of Object.keys(S.years)) if (!remote.has('y' + y) && !dirty.has('y' + y)) delete S.years[y];
   }
   S.meta.years = Object.keys(S.years).sort();
+  if (migrateSavings()) dirty.add('meta');
   saveLocal(); render();
 }
 async function push() {
@@ -127,9 +128,10 @@ function series() {
   const out = [], now = today(), CY = now.getFullYear(), CM = now.getMonth();
   let run = 0;
   for (const y of Object.keys(S.years).sort()) S.years[y].forEach((m, i) => {
-    const inc = sum(m.inc), exp = sum(m.exp) + sum(billsIn(y, i)), sav = +m.sav || 0;
-    run = run + inc - sav - exp;
-    out.push({y, i, inc, exp, sav, total: run, past: +y < CY || (+y === CY && i <= CM), now: +y === CY && i === CM});
+    const inc = sum(m.inc), exp = sum(m.exp) + sum(billsIn(y, i)), manual = +m.sav || 0;
+    const linked = potDepositsIn(y, i).reduce((t, x) => t + x.d.a, 0);
+    run = run + inc - manual - exp;          // savings deposits are shown, never subtracted
+    out.push({y, i, inc, exp, sav: linked || manual, linked, manual, total: run, past: +y < CY || (+y === CY && i <= CM), now: +y === CY && i === CM});
   });
   return out;
 }
@@ -140,6 +142,7 @@ function render() {
   renderHome(ser); renderMonths(ser); renderSavings(); renderBills();
   if (desk.matches) renderDetail(ser);
   else if (sheetOpen && sheetMonth && S.years[sheetMonth.y]) $('sheetBody').innerHTML = monthHTML(sheetMonth.y, sheetMonth.i, ser);
+  if (sheetOpen && sheetPot) potSheet(sheetPot.id, sheetPot.k);
 }
 function renderHome(ser) {
   const cur = ser.find(p => p.now) || ser.filter(p => p.past).pop() || ser[0];
@@ -185,7 +188,8 @@ function entryRows(y, i) {
       <button class="x" data-act="entry-del" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}" aria-label="Delete ${esc(x.n || (inc ? 'income' : 'expense'))}">×</button></li>`;
   }).join('');
   h += billsIn(y, i).map(b => `<li><button class="rowbtn" data-act="bill-edit" data-j="${b.j}"><span class="dot e">↑</span><span class="t">${esc(b.name)}<small>Bill due ${esc(fmtDate(b.due))}</small></span><span class="amt">−${esc(peso(+b.a, 2))}</span></button><span class="x" aria-hidden="true"></span></li>`).join('');
-  if (+m.sav) h += `<li><button class="rowbtn" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}"><span class="dot s">₱</span><span class="t">To savings<small>Moved out of total</small></span><span class="amt">${esc(peso(+m.sav, 2))}</span></button>
+  h += potDepositsIn(y, i).map(({pot, d}) => `<li><button class="rowbtn" data-act="pot-open" data-p="${esc(pot.id)}"><span class="dot s">₱</span><span class="t">${esc(pot.name)}<small>Saved · ${esc(fmtDate(d.date, {month: 'short', day: 'numeric'}))}${d.date > todayIso() ? ' · planned' : ''} · not subtracted</small></span><span class="amt">${esc(peso(d.a, 2))}</span></button><span class="x" aria-hidden="true"></span></li>`).join('');
+  if (+m.sav) h += `<li><button class="rowbtn" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}"><span class="dot s">₱</span><span class="t">To savings${potDepositsIn(y, i).length ? ' (old entry)' : ''}<small>Subtracted from total</small></span><span class="amt">${esc(peso(+m.sav, 2))}</span></button>
       <button class="x" data-act="sav-del" data-y="${esc(y)}" data-i="${i}" aria-label="Remove savings for ${M[i]}">×</button></li>`;
   return h;
 }
@@ -231,32 +235,6 @@ function renderMonths(ser) {
     + `<button class="plain" data-act="statement">Import a bank statement</button>`
     + (binN ? `<button class="plain" data-act="settings">Recycle bin (${binN})</button>` : '');
   $('yearFoot').textContent = rows.length ? `${selYear}: income ${peso(rows.reduce((a, p) => a + p.inc, 0))}, spent ${peso(rows.reduce((a, p) => a + p.exp, 0))}, saved ${peso(rows.reduce((a, p) => a + p.sav, 0))}.` : '';
-}
-
-function renderSavings() {
-  const w = $('savWrap'), m = S.meta, now = today().getTime();
-  let h = '';
-  const cyc = (m.maya && m.maya.cycles) || [];
-  if (cyc.length) {
-    const cur = cyc.find(c => now >= Date.parse(c.start) && now < Date.parse(c.end)) || cyc[cyc.length - 1];
-    const prog = Math.min(1, Math.max(0, (now - Date.parse(cur.start)) / (Date.parse(cur.end) - Date.parse(cur.start))));
-    const maxB = Math.max(...cyc.map(c => c.end_bal));
-    h += `<div class="card"><div class="muted">Maya time deposit · ${esc((cur.rate * 100).toFixed(2))}% p.a.</div>
-      <div class="big" style="font-size:36px">${esc(peso(cur.end_bal))}</div>
-      <div class="muted">Projected at maturity, ${esc(fmtDate(cur.end, {month: 'long', day: 'numeric', year: 'numeric'}))}</div>
-      <div class="bar"><i style="width:${(prog * 100).toFixed(1)}%"></i></div>
-      <div class="muted">${Math.round(prog * 100)}% through this cycle · ${esc(peso(cur.deposits))} put in · ${esc(peso(cur.net_int, 2))} interest after tax</div></div>
-      <h2>Maya ladder plan</h2><div class="ladder">${cyc.map(c => `<div class="r ${Date.parse(c.end) > now ? 'f' : ''}"><span>${esc(fmtDate(c.end, {month: 'short', year: 'numeric'}))}</span><i style="width:${(c.end_bal / maxB * 100).toFixed(1)}%"></i><span>${esc(pesoS(c.end_bal))}</span></div>`).join('')}</div>
-      <p class="muted">Solid = matured, faded = planned.</p>`;
-  }
-  h = `<div class="savcols"><div>${h}</div><div><h2${cyc.length ? '' : ' style="margin-top:0"'}>Other pots</h2>`;
-  if (m.phone) {
-    const pp = Math.min(1, Math.max(0, (now - Date.parse(m.phone.start)) / (Date.parse(m.phone.end) - Date.parse(m.phone.start))));
-    h += `<div class="card"><div class="muted">Phone upgrade fund · Maya</div><div class="serif" style="font-size:26px">${esc(peso(m.phone.end_bal))}</div><div class="bar"><i style="width:${(pp * 100).toFixed(1)}%"></i></div><div class="muted">Projected by ${esc(fmtDate(m.phone.end, {month: 'short', year: 'numeric'}))}</div></div>`;
-  }
-  h += (m.accounts || []).map((a, j) => `<button class="card" data-act="acct" data-j="${j}"><div class="muted">${esc(a.name)}</div><div class="serif" style="font-size:26px">${esc(peso(+a.bal, 2))}</div><div class="muted">As of ${esc(a.asof)} · tap to update</div></button>`).join('');
-  h += `<button class="go" data-act="acct" data-j="new">Add an account</button></div></div>`;
-  w.innerHTML = h;
 }
 
 function renderBills() {
@@ -403,10 +381,237 @@ function quickAdd() {
   quickPreview();
   toast(made.length > 1 ? `${made.length} ${p.name} payments added` : `${p.name} added`, () => { S.meta.bills = S.meta.bills.filter(b => !made.includes(b)); commit('meta'); });
 }
+/* ================= savings: time deposits with top-ups, MP2, plain savings accounts ================= */
+// meta.savings = [pot]
+//   td    {id, name, kind:'td', rate, tax, cycleDays, cycles:[{start, end, rate, carry, deposits:[{id, date, a}]}]}
+//   mp2   {id, name, kind:'mp2', rate, rates:{year: rate}, payout:'compound'|'annual', deposits:[{id, date, a}]}
+//   basic {id, name, kind:'basic', rate, tax, txns:[{id, date, a}]}   (a < 0 = withdrawal)
+// Deposits show up as a month's "Saved" but are never subtracted from total money:
+// the transfer itself already appears as money out in the imported statement.
+const DAYMS = 864e5;
+const dnum = s => Date.parse(s + 'T00:00:00');
+const addDays = (s, n) => iso(new Date(dnum(s) + n * DAYMS));
+const daysBetween = (a, b) => Math.round((dnum(b) - dnum(a)) / DAYMS);
+const todayIso = () => iso(today());
+const pots = () => (S.meta.savings = S.meta.savings || []);
+const potById = id => pots().find(p => p.id === id);
+const KIND = {td: 'Time deposit with top-ups', mp2: 'Pag-IBIG MP2', basic: 'Savings account'};
+const pct = r => (Math.round(r * 10000) / 100).toString().replace(/\.0+$/, '') + '%';
+
+function migrateSavings() {
+  if (S.meta.savingsMigrated) return false;
+  S.meta.savingsMigrated = true;
+  // older versions kept simple balances in meta.accounts (e.g. Seabank) — turn them into savings accounts
+  S.meta.savings = (S.meta.savings || []).concat((S.meta.accounts || []).filter(a => !(S.meta.savings || []).some(p => p.name === a.name)).map(a => ({id: uid(), name: a.name, kind: 'basic', rate: /seabank/i.test(a.name) ? 0.035 : 0, tax: 0.2,
+    txns: [{id: uid(), date: parseDateStr(String(a.asof || '').replace(/\(.*\)/, ''), today().getFullYear()) || todayIso(), a: +a.bal || 0}]})));
+  return true;
+}
+
+/* ---- time deposit cycles ---- */
+function tdCycle(pot, c) {
+  const rate = c.rate ?? pot.rate, tax = pot.tax ?? 0.2, end = c.end || addDays(c.start, pot.cycleDays || 181), t = todayIso();
+  const net = (a, date) => a * rate * Math.max(0, daysBetween(date, end)) / 365 * (1 - tax);
+  const items = [];
+  if (+c.carry) items.push({carry: true, date: c.start, a: +c.carry});
+  [...(c.deposits || [])].sort((p, q) => p.date.localeCompare(q.date)).forEach(d => items.push({...d}));
+  let bal = 0, interest = 0, principal = 0, now = 0;
+  items.forEach(it => { it.days = Math.max(0, daysBetween(it.date, end)); it.net = net(it.a, it.date); interest += it.net; principal += it.a; bal += it.a + it.net; it.bal = bal; it.planned = it.date > t; if (!it.planned) now += it.a; });
+  return {end, rate, items, closing: principal + interest, principal, interest, now, done: t >= end, prog: Math.min(1, Math.max(0, daysBetween(c.start, t) / Math.max(1, daysBetween(c.start, end))))};
+}
+const tdCurrent = pot => { const t = todayIso(), cs = pot.cycles || []; let k = cs.length - 1; for (let i = 0; i < cs.length; i++) if (cs[i].start <= t) k = i; return Math.max(0, k); };
+
+/* ---- MP2: dividend = rate × average monthly balance, credited each year end, 5-year term ---- */
+function mp2Calc(pot) {
+  const deps = [...(pot.deposits || [])].sort((p, q) => p.date.localeCompare(q.date)), t = todayIso();
+  if (!deps.length) return {years: [], contrib: 0, divs: 0, now: 0, maturity: null, atMaturity: 0, contribNow: 0};
+  const start = deps[0].date, sd = new Date(dnum(start)), maturity = iso(new Date(sd.getFullYear() + 5, sd.getMonth(), sd.getDate()));
+  const years = []; let credited = 0, paidOut = 0, divNow = 0;
+  for (let y = sd.getFullYear(); y <= +maturity.slice(0, 4); y++) {
+    let sumBal = 0, contribY = 0;
+    for (let m = 0; m < 12; m++) {
+      const me = iso(new Date(y, m + 1, 0)); if (me < start.slice(0, 8) + '01' || me.slice(0, 7) > maturity.slice(0, 7)) continue;
+      const c = deps.filter(d => d.date <= me && d.date <= maturity).reduce((s, d) => s + d.a, 0);
+      sumBal += c + (pot.payout === 'annual' ? 0 : credited);
+    }
+    contribY = deps.filter(d => d.date.startsWith(String(y)) && d.date <= maturity).reduce((s, d) => s + d.a, 0);
+    const rate = (pot.rates && pot.rates[y] != null) ? pot.rates[y] : pot.rate, div = rate * sumBal / 12;
+    const creditDate = String(y) === maturity.slice(0, 4) ? maturity : `${y}-12-31`;
+    if (pot.payout === 'annual') paidOut += div; else credited += div;
+    if (creditDate <= t) divNow += div;
+    years.push({y, contrib: contribY, rate, div, end: deps.filter(d => d.date <= `${y}-12-31` && d.date <= maturity).reduce((s, d) => s + d.a, 0) + (pot.payout === 'annual' ? 0 : credited), est: creditDate > t});
+  }
+  const contrib = deps.filter(d => d.date <= maturity).reduce((s, d) => s + d.a, 0), contribNow = deps.filter(d => d.date <= t).reduce((s, d) => s + d.a, 0);
+  return {years, contrib, contribNow, divs: credited + paidOut, now: contribNow + (pot.payout === 'annual' ? 0 : divNow), maturity, atMaturity: contrib + credited, paidOut, start};
+}
+
+/* ---- plain savings account: daily interest on the running balance, after tax ---- */
+function basicCalc(pot) {
+  const tx = [...(pot.txns || [])].sort((p, q) => p.date.localeCompare(q.date)), t = todayIso(), r = (pot.rate || 0) * (1 - (pot.tax ?? 0.2)) / 365;
+  let bal = 0, interest = 0, prev = null;
+  for (const x of tx.filter(x => x.date <= t)) { if (prev) { const n = daysBetween(prev, x.date), g = bal * (Math.pow(1 + r, n) - 1); interest += g; bal += g; } bal += x.a; prev = x.date; }
+  if (prev) { const n = daysBetween(prev, t), g = bal * (Math.pow(1 + r, n) - 1); interest += g; bal += g; }
+  return {now: bal, interest, monthly: bal * (Math.pow(1 + r, 30) - 1), txns: tx};
+}
+const potNow = p => p.kind === 'td' ? (p.cycles && p.cycles.length ? tdCycle(p, p.cycles[tdCurrent(p)]).now : 0) : p.kind === 'mp2' ? mp2Calc(p).now : basicCalc(p).now;
+
+/* ---- link to months: deposits made in a month = that month's Saved ---- */
+function potDepositsIn(y, i) {
+  const key = `${y}-${String(i + 1).padStart(2, '0')}`, out = [];
+  for (const p of (S.meta.savings || [])) {
+    const list = p.kind === 'td' ? (p.cycles || []).flatMap(c => c.deposits || []) : p.kind === 'mp2' ? (p.deposits || []) : (p.txns || []).filter(x => x.a > 0);
+    list.filter(d => d.date.startsWith(key)).forEach(d => out.push({pot: p, d}));
+  }
+  return out.sort((a, b) => a.d.date.localeCompare(b.d.date));
+}
+
+/* ---- Savings tab ---- */
+function renderSavings() {
+  const w = $('savWrap'), ps = pots();
+  const total = ps.reduce((s, p) => s + potNow(p), 0);
+  const card = p => {
+    let sub = '', big = potNow(p), bar = null;
+    if (p.kind === 'td') {
+      if (!(p.cycles || []).length) sub = 'No cycle yet · tap to start one';
+      else { const k = tdCurrent(p), c = tdCycle(p, p.cycles[k]); bar = c.prog; sub = c.done ? `Cycle ended ${fmtDate(c.end)} · tap to start the next` : `${esc(peso(c.closing))} at maturity, ${esc(fmtDate(c.end))}`; }
+    } else if (p.kind === 'mp2') { const m = mp2Calc(p); sub = m.maturity ? `${esc(peso(m.atMaturity))} projected at maturity, ${esc(fmtDate(m.maturity, {month: 'short', year: 'numeric'}))} · ${pct(p.rate)} dividend` : 'No contributions yet'; if (m.maturity) bar = Math.min(1, Math.max(0, daysBetween(m.start, todayIso()) / daysBetween(m.start, m.maturity))); }
+    else { const b = basicCalc(p); sub = `${pct(p.rate || 0)} p.a.${b.interest ? ` · ${esc(peso(b.interest, 2))} interest so far` : ''}`; }
+    return `<button class="card potcard" data-act="pot-open" data-p="${esc(p.id)}"><div class="muted">${esc(p.name)} · ${esc(KIND[p.kind])}</div>
+      <div class="serif" style="font-size:28px">${esc(peso(big, 2))}</div>${bar != null ? `<div class="bar"><i style="width:${(bar * 100).toFixed(1)}%"></i></div>` : ''}<div class="muted">${sub}</div></button>`;
+  };
+  w.innerHTML = `<div class="savtotal"><div class="muted">In savings now</div><div class="big" style="font-size:clamp(34px,10vw,44px)">${esc(peso(total, 2))}</div>
+      <p class="muted">Deposits here show as each month’s <b>Saved</b> in Months, but aren’t subtracted from total money — the transfer already shows as money out in your imported statement.</p></div>
+    <div class="potgrid">${ps.map(card).join('') || '<p class="empty">No savings yet. Add your Maya time deposit, MP2 or a savings account, or import the Maya file from your spreadsheet in Settings.</p>'}</div>
+    <button class="go" data-act="pot-new">Add savings</button>`;
+}
+
+/* ---- pot sheet ---- */
+let sheetPot = null;   // {id, k} — the open pot, refreshed after every change
+function potSheet(id, k) {
+  const p = potById(id); if (!p) return closeSheet();
+  if (p.kind === 'td') k = k == null || k >= (p.cycles || []).length ? tdCurrent(p) : Math.max(0, k);
+  const html = potHTML(p, k);
+  if (sheetOpen && sheetPot && sheetPot.id === id) $('sheetBody').innerHTML = html; else openSheet(html);
+  sheetPot = {id, k}; bindPot(p);
+}
+function potHTML(p, k) {
+  const head = `<div class="sheethead potsheet"><h2>${esc(p.name)}</h2><span style="display:flex;gap:2px"><button class="ghost" data-act="pot-edit" data-p="${esc(p.id)}">Edit</button><button class="ghost" data-act="close">Done</button></span></div>`;
+  const delBtn = (cyc, d) => `<button class="x" data-act="dep-del" data-p="${esc(p.id)}" data-c="${cyc}" data-id="${esc(d.id)}" aria-label="Delete deposit">×</button>`;
+  const addForm = (label, extra = '') => `<form id="depForm" class="depform" novalidate>
+      <div class="two"><div><label for="depDate">Date</label><input id="depDate" type="date" value="${todayIso()}"></div><div><label for="depAmt">${label}</label><input id="depAmt" inputmode="decimal" placeholder="₱0" class="amtin" style="font-size:20px"></div></div>${extra}
+      <button class="go" type="submit">Add</button></form>`;
+  if (p.kind === 'td') {
+    const cs = p.cycles || [];
+    if (!cs.length) return head + `<p class="muted">${esc(KIND.td)} · ${pct(p.rate)} p.a. · ${pct(p.tax ?? .2)} tax · ${p.cycleDays || 181}-day cycles</p><button class="go" data-act="cycle-new" data-p="${esc(p.id)}">Start the first cycle today</button>`;
+    const c = tdCycle(p, cs[k]), last = k === cs.length - 1;
+    return head + `<div class="chips cyclechips">${cs.map((x, i) => `<button class="chip" data-act="pot-cycle" data-p="${esc(p.id)}" data-k="${i}" aria-pressed="${i === k}">${esc(fmtDate(x.start, {month: 'short', year: 'numeric'}))}</button>`).join('')}</div>
+      <div class="trio"><div class="tile"><span>Put in</span><b>${esc(pesoS(c.principal))}</b></div><div class="tile"><span>Interest</span><b class="up">+${esc(peso(c.interest, 2))}</b></div><div class="tile"><span>At maturity</span><b>${esc(pesoS(c.closing))}</b></div></div>
+      <p class="muted">${esc(fmtDate(cs[k].start))} – ${esc(fmtDate(c.end))} · ${pct(c.rate)} p.a. · ${pct(p.tax ?? .2)} tax · each deposit earns only for the days left</p>
+      <div class="bar"><i style="width:${(c.prog * 100).toFixed(1)}%"></i></div>
+      <ul class="list deplist">${c.items.map(it => `<li class="${it.planned ? 'planned' : ''}"><span class="t">${it.carry ? 'Carried over' : esc(fmtDate(it.date))}<small>${it.days} days · +${esc(peso(it.net, 2))} interest${it.planned ? ' · planned' : ''}</small></span>
+        <span class="amtcol"><b class="amt">${esc(peso(it.a, 2))}</b><small>${esc(peso(it.bal, 2))}</small></span>${it.carry ? '<span class="x" aria-hidden="true"></span>' : delBtn(k, it)}</li>`).join('')}</ul>
+      ${addForm('Deposit')}
+      ${last ? `<button class="${c.done ? 'go' : 'plain'}" data-act="cycle-next" data-p="${esc(p.id)}">Start next cycle${c.done ? '' : ' early'} with ${esc(peso(c.closing, 2))}</button>` : ''}`;
+  }
+  if (p.kind === 'mp2') {
+    const m = mp2Calc(p), deps = [...(p.deposits || [])].sort((a, b) => b.date.localeCompare(a.date));
+    return head + `<div class="trio"><div class="tile"><span>Contributed</span><b>${esc(pesoS(m.contribNow))}</b></div><div class="tile"><span>Dividends</span><b class="up">+${esc(pesoS(m.divs))}</b></div><div class="tile"><span>At maturity</span><b>${esc(pesoS(m.atMaturity))}</b></div></div>
+      <p class="muted">${pct(p.rate)} dividend (2025 rate: 7.12%) · tax-free · ${p.payout === 'annual' ? 'paid out yearly' : 'compounded'}${m.maturity ? ` · matures ${esc(fmtDate(m.maturity))}` : ''}. Dividend = rate × average monthly balance; future years are estimates.</p>
+      ${m.years.length ? `<table class="ytable"><thead><tr><th>Year</th><th>Added</th><th>Dividend</th><th>Balance</th></tr></thead><tbody>${m.years.map(r => `<tr class="${r.est ? 'est' : ''}"><td>${r.y}</td><td>${esc(pesoS(r.contrib))}</td><td class="up">+${esc(peso(r.div))}</td><td>${esc(pesoS(r.end))}</td></tr>`).join('')}</tbody></table>` : ''}
+      ${addForm('Contribution', `<label class="check"><input type="checkbox" id="depRep"><span>Repeat monthly for <select id="depN" style="width:auto;min-height:36px;padding:4px 28px 4px 8px;display:inline-block">${[3, 6, 12, 24, 36, 60].map(n => `<option>${n}</option>`).join('')}</select> months</span></label>`)}
+      <ul class="list deplist">${deps.map(d => `<li class="${d.date > todayIso() ? 'planned' : ''}"><span class="t">${esc(fmtDate(d.date))}<small>${d.date > todayIso() ? 'planned' : 'contribution'}</small></span><b class="amt">${esc(peso(d.a, 2))}</b>${delBtn(-1, d)}</li>`).join('')}</ul>`;
+  }
+  const b = basicCalc(p);
+  return head + `<div class="trio"><div class="tile"><span>Balance</span><b>${esc(pesoS(b.now))}</b></div><div class="tile"><span>Interest so far</span><b class="up">+${esc(peso(b.interest, 2))}</b></div><div class="tile"><span>Next 30 days</span><b class="up">+${esc(peso(b.monthly, 2))}</b></div></div>
+    <p class="muted">${pct(p.rate || 0)} p.a. · ${pct(p.tax ?? .2)} tax · interest added daily. Use a minus amount for withdrawals.</p>
+    ${addForm('Deposit (− to withdraw)')}
+    <ul class="list deplist">${[...b.txns].reverse().map(d => `<li><span class="t">${esc(fmtDate(d.date))}<small>${d.a < 0 ? 'withdrawal' : 'deposit'}</small></span><b class="amt ${d.a < 0 ? 'dn' : ''}">${esc(peso(d.a, 2))}</b>${delBtn(-1, d)}</li>`).join('')}</ul>`;
+}
+function bindPot(p) {
+  const f = $('depForm'); if (!f) return;
+  f.addEventListener('submit', e => {
+    e.preventDefault();
+    const a = parseAmt($('depAmt').value), date = $('depDate').value;
+    $('depAmt').classList.toggle('bad', isNaN(a) || (p.kind !== 'basic' && a <= 0)); if (isNaN(a) || !date || (p.kind !== 'basic' && a <= 0)) return;
+    const added = [];
+    if (p.kind === 'td') { const c = p.cycles[sheetPot.k]; const it = {id: uid(), date, a}; (c.deposits = c.deposits || []).push(it); added.push([c.deposits, it]); }
+    else if (p.kind === 'mp2') {
+      const n = $('depRep') && $('depRep').checked ? +$('depN').value : 1, d0 = new Date(dnum(date));
+      for (let i = 0; i < n; i++) { const it = {id: uid(), date: iso(mkDate(d0.getFullYear(), d0.getMonth() + i, d0.getDate())), a}; (p.deposits = p.deposits || []).push(it); added.push([p.deposits, it]); }
+    } else { const it = {id: uid(), date, a}; (p.txns = p.txns || []).push(it); added.push([p.txns, it]); }
+    commit('meta');
+    toast(added.length > 1 ? `${added.length} contributions added` : `${peso(Math.abs(a), 2)} ${a < 0 ? 'withdrawal' : 'deposit'} added`, () => { added.forEach(([list, it]) => { const i = list.indexOf(it); if (i >= 0) list.splice(i, 1); }); commit('meta'); });
+  });
+}
+function potForm(id) {
+  const p = id ? potById(id) : {name: '', kind: 'td', rate: 0.06, tax: 0.2, cycleDays: 181, payout: 'compound'};
+  openSheet(`<div class="sheethead"><h2>${id ? 'Edit ' + esc(p.name) : 'Add savings'}</h2><button type="button" class="ghost" data-act="${id ? 'pot-open' : 'close'}" data-p="${esc(id || '')}">Cancel</button></div>
+    <form id="potF" novalidate>
+      <label for="pName">Name</label><input id="pName" maxlength="40" value="${esc(p.name)}" placeholder="Maya time deposit, MP2, Seabank…">
+      <label for="pKind">Type</label><select id="pKind" ${id ? 'disabled' : ''}>${Object.entries(KIND).map(([k, l]) => `<option value="${k}" ${p.kind === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <div class="two"><div><label for="pRate" id="pRateL">Interest % per year</label><input id="pRate" inputmode="decimal" value="${(p.rate * 100).toFixed(2).replace(/\.?0+$/, '')}"></div>
+        <div id="pTaxW"><label for="pTax">Tax on interest %</label><input id="pTax" inputmode="decimal" value="${((p.tax ?? .2) * 100).toFixed(0)}"></div></div>
+      <div id="pTdW"><label for="pDays">Cycle length (days)</label><input id="pDays" inputmode="numeric" value="${p.cycleDays || 181}">
+        ${id ? '' : `<div class="two"><div><label for="pStart">First cycle starts</label><input id="pStart" type="date" value="${todayIso()}"></div><div><label for="pOpen">Opening amount</label><input id="pOpen" inputmode="decimal" placeholder="₱0"></div></div>`}</div>
+      <div id="pMp2W"><label for="pPay">Dividends</label><select id="pPay"><option value="compound" ${p.payout !== 'annual' ? 'selected' : ''}>Compounded (added to savings)</option><option value="annual" ${p.payout === 'annual' ? 'selected' : ''}>Paid out every year</option></select></div>
+      <div id="pBasicW">${id ? '' : `<div class="two"><div><label for="pBDate">Balance as of</label><input id="pBDate" type="date" value="${todayIso()}"></div><div><label for="pBal">Current balance</label><input id="pBal" inputmode="decimal" placeholder="₱0"></div></div>`}</div>
+      <button class="go" type="submit">${id ? 'Save' : 'Add'}</button>
+      ${id ? '<button type="button" class="danger" id="pDel">Delete this savings</button>' : ''}
+    </form>`, () => {
+    const show = () => { const k = $('pKind').value; $('pTdW').hidden = k !== 'td'; $('pMp2W').hidden = k !== 'mp2'; $('pBasicW').hidden = k !== 'basic'; $('pTaxW').hidden = k === 'mp2'; $('pRateL').textContent = k === 'mp2' ? 'Dividend % per year' : 'Interest % per year'; if (!id && k === 'mp2' && $('pRate').value === '6') $('pRate').value = '7.12'; if (!id && k === 'basic' && $('pRate').value === '6') $('pRate').value = '3.5'; };
+    $('pKind').addEventListener('change', show); show();
+    $('potF').addEventListener('submit', e => {
+      e.preventDefault();
+      const name = $('pName').value.trim(), rate = parseFloat($('pRate').value) / 100, tax = parseFloat($('pTax').value) / 100;
+      $('pName').classList.toggle('bad', !name); $('pRate').classList.toggle('bad', isNaN(rate)); if (!name || isNaN(rate)) return;
+      if (id) {
+        Object.assign(p, {name, rate, tax: isNaN(tax) ? p.tax : tax, cycleDays: +$('pDays').value || p.cycleDays, payout: $('pPay').value});
+        commit('meta'); return potSheet(p.id);
+      }
+      const kind = $('pKind').value, np = {id: uid(), name, kind, rate};
+      if (kind === 'td') { Object.assign(np, {tax: isNaN(tax) ? .2 : tax, cycleDays: +$('pDays').value || 181}); const st = $('pStart').value || todayIso(), op = parseAmt($('pOpen').value || '0'); np.cycles = [{start: st, end: addDays(st, np.cycleDays), rate, carry: 0, deposits: op > 0 ? [{id: uid(), date: st, a: op}] : []}]; }
+      if (kind === 'mp2') Object.assign(np, {payout: $('pPay').value, rates: {2025: 0.0712, 2024: 0.071, 2023: 0.0705}, deposits: []});
+      if (kind === 'basic') { const b = parseAmt($('pBal').value || '0'); Object.assign(np, {tax: isNaN(tax) ? .2 : tax, txns: b ? [{id: uid(), date: $('pBDate').value || todayIso(), a: b}] : []}); }
+      pots().push(np); commit('meta'); potSheet(np.id);
+    });
+    const d = $('pDel'); if (d) d.addEventListener('click', () => {
+      const list = pots(), i = list.indexOf(p); list.splice(i, 1); closeSheet(); commit('meta');
+      toast(`${p.name} deleted`, () => { list.splice(i, 0, p); commit('meta'); });
+    });
+  });
+}
+function savingsAct(d) {
+  const p = d.p ? potById(d.p) : null;
+  switch (d.act) {
+    case 'pot-open': return potSheet(d.p);
+    case 'pot-new': return potForm(null);
+    case 'pot-edit': return potForm(d.p);
+    case 'pot-cycle': return potSheet(d.p, +d.k);
+    case 'cycle-new': { const st = todayIso(); p.cycles = [{start: st, end: addDays(st, p.cycleDays || 181), rate: p.rate, carry: 0, deposits: []}]; commit('meta'); return potSheet(p.id, 0); }
+    case 'cycle-next': {
+      const last = p.cycles[p.cycles.length - 1], c = tdCycle(p, last), st = c.end;
+      p.cycles.push({start: st, end: addDays(st, p.cycleDays || 181), rate: p.rate, carry: Math.round(c.closing * 100) / 100, deposits: []});
+      commit('meta'); potSheet(p.id, p.cycles.length - 1);
+      toast(`New cycle started with ${peso(c.closing, 2)}`, () => { p.cycles.pop(); commit('meta'); potSheet(p.id); }); return;
+    }
+    case 'dep-del': {
+      const list = p.kind === 'td' ? p.cycles[+d.c].deposits : p.kind === 'mp2' ? p.deposits : p.txns, i = list.findIndex(x => x.id === d.id); if (i < 0) return;
+      const [x] = list.splice(i, 1); commit('meta'); toast('Deposit deleted', () => { list.splice(i, 0, x); commit('meta'); }); return;
+    }
+  }
+}
+function importSavingsFile(d) {
+  const add = (d.savings || []).filter(p => p && p.kind && p.name);
+  if (!add.length) throw new Error('bad');
+  const before = JSON.parse(JSON.stringify(pots()));
+  add.forEach(p => { const i = pots().findIndex(x => x.id === p.id || x.name === p.name); if (i >= 0) pots()[i] = p; else pots().push(p); });
+  closeSheet(); commit('meta'); showView('savings');
+  toast(`Added ${add.map(p => p.name).join(', ')}`, () => { S.meta.savings = before; commit('meta'); });
+}
+
 /* ================= sheet + toast ================= */
 let sheetOpen = false;
 function openSheet(html, onReady) {
-  sheetMonth = null;
+  sheetMonth = null; sheetPot = null;
   $('sheetBody').innerHTML = html;
   $('scrim').classList.add('on'); $('sheet').classList.add('on'); document.body.classList.add('locked');
   sheetOpen = true;
@@ -414,7 +619,7 @@ function openSheet(html, onReady) {
 }
 function closeSheet() {
   $('scrim').classList.remove('on'); $('sheet').classList.remove('on'); document.body.classList.remove('locked');
-  sheetOpen = false; sheetMonth = null;
+  sheetOpen = false; sheetMonth = null; sheetPot = null;
 }
 $('scrim').addEventListener('click', closeSheet);
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetOpen) closeSheet(); });
@@ -615,6 +820,7 @@ function settings() {
 }
 let pendingImport = null;
 function importData(d) {
+  if (d && d.pera === 'savings') return importSavingsFile(d);
   if (!d || typeof d !== 'object' || !d.meta || !d.years) throw new Error('bad');
   for (const [y, ms] of Object.entries(d.years)) if (!/^\d{4}$/.test(y) || !Array.isArray(ms) || ms.length !== 12 || !ms.every(m => Array.isArray(m.inc) && Array.isArray(m.exp))) throw new Error('bad');
   pendingImport = d;
@@ -640,6 +846,7 @@ function importApply(mode) {
   const gone = Object.keys(S.years).filter(y => !d.years[y]);
   S = {meta: Object.assign(blank().meta, d.meta), years: d.years};
   S.meta.years = Object.keys(S.years).sort();
+  migrateSavings();
   commit('meta', ...S.meta.years.map(y => 'y' + y), ...gone.map(y => 'y' + y));
   toast(`Imported ${S.meta.years.join(', ')}`, () => { S = before; commit('meta', ...Object.keys(S.years).map(y => 'y' + y), ...Object.keys(d.years).map(y => 'y' + y)); });
 }
@@ -1133,6 +1340,7 @@ document.addEventListener('click', e => {
     case 'imp-flip': if (imp) { imp.rows.forEach(r => { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; r.dup = isDup(r); }); renderReview(); } return;
     case 'imp-all': return importApply('all');
     case 'year-add': return addYear(d.y);
+    case 'pot-open': case 'pot-new': case 'pot-edit': case 'pot-cycle': case 'cycle-new': case 'cycle-next': case 'dep-del': return savingsAct(d);
     case 'acct': return acctForm(j);
     case 'bill-pay': {
       const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta');
@@ -1198,7 +1406,7 @@ $('authForm').addEventListener('submit', async e => {
 
 async function start(u) {
   if (user && user.id === u.id) return;
-  user = u; loadLocal(); purgeTrash(); showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
+  user = u; loadLocal(); purgeTrash(); if (migrateSavings()) { dirty.add('meta'); saveLocal(); } showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
   await push(); await pull();
 }
 function stop(msg) { hideToast(); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
