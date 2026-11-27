@@ -776,9 +776,9 @@ async function decryptXlsx(buf, password, onStatus) {
 /* ================= statement import: CSV, PDF, pasted text ================= */
 // Everything runs in the browser. The statement file is never uploaded; only the rows you import are saved.
 const MONTHS3 = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-const AMT_RE = /(?:₱|PHP|Php|P)?\s?-?\(?\d{1,3}(?:,\d{3})*\.\d{2}\)?|(?:₱|PHP|Php|P)\s?-?\d+(?:\.\d{1,2})?/g;
-const OUT_WORDS = /\b(debit|dr|sent|send|payment|paid|pay|purchase|bought|buy|withdraw(?:al)?|cash ?out|transfer(?:red)? to|fee|charge|bills?|load|deduct)\b/i;
-const IN_WORDS = /\b(credit|cr|received|receive|deposit|cash ?in|refund|interest|salary|payroll|transfer(?:red)? from|incoming|reversal|cashback)\b/i;
+const AMT_RE = /(?:₱|PHP|Php|P)?\s?-?\(?\d{1,3}(?:,\d{3})*\.\d{2}\)?(?![\d-])|(?:₱|PHP|Php)\s?-?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?(?![\d-])|P(?=\d)-?\d+(?:\.\d{1,2})?(?![\d-])/g;
+const OUT_WORDS = /\b(debit|dr|sent|send|you sent|payment|paid|pay|purchase|pos|bought|buy|withdraw(?:al)?|cash ?out|transfer(?:red)? to|to account|fee|charge|bills?|load|deduct|atm|instapay to|pesonet to|qr ph payment|scan to pay|visa|mastercard|mc|card purchase|online purchase)\b/i;
+const IN_WORDS = /\b(credit|cr|received|receive|you received|deposit|cash ?in|refund|interest|salary|payroll|transfer(?:red)? from|from account|incoming|reversal|cashback|rebate|instapay from|pesonet from)\b/i;
 
 function toNum(s) {
   if (s == null) return NaN;
@@ -802,32 +802,62 @@ function parseDateStr(s, fallbackYear) {
 const DATE_AT_START = /^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}[\s-]+[A-Za-z]{3,9}\.?(?:[\s,-]+\d{2,4})?|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?)(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AP]M)?)?/i;
 
 /* ---- text lines (PDF / paste) → rows ---- */
+// lines are plain strings (paste) or {text, items:[{x, w, s}]} from a PDF, which lets us use Debit/Credit column positions
+const OUT_HEAD = /^(debit|debits|withdrawals?|money out|outflow|paid out|amount out|sent|dr)$/i, IN_HEAD = /^(credit|credits|deposits?|money in|inflow|amount in|received|cr)$/i, BAL_HEAD = /^(running )?balance$/i;
+const DRCR = /^\s*(DR|CR|D|C)\b/;
 function rowsFromLines(lines) {
-  const yearHint = (lines.join(' ').match(/\b20\d{2}\b/) || [String(today().getFullYear())])[0];
-  const rows = []; let prevBal = null;
-  for (const raw of lines) {
-    const line = raw.replace(/\s+/g, ' ').trim();
+  lines = lines.map(l => typeof l === 'string' ? {text: l, items: null} : l);
+  // a transaction can wrap over several lines (date + ref, description, then amount + balance):
+  // keep adding lines to it until one of them carries an amount
+  const merged = []; let cur = null;
+  for (const L of lines) {
+    const t = L.text.replace(/\s+/g, ' ').trim(); if (!t) continue;
+    if (DATE_AT_START.test(t) && parseDateStr(DATE_AT_START.exec(t)[1], 2000)) { cur = {text: t, items: L.items ? [...L.items] : null, open: !(t.match(AMT_RE) || []).length}; merged.push(cur); continue; }
+    if (cur && cur.open) { cur.text += ' ' + t; if (cur.items && L.items) cur.items.push(...L.items); if ((t.match(AMT_RE) || []).length) cur.open = false; continue; }
+    cur = null; merged.push({text: t, items: L.items});
+  }
+  lines = merged;
+  const yearHint = (lines.map(l => l.text).join(' ').match(/\b20\d{2}\b/) || [String(today().getFullYear())])[0];
+  const raw = []; let cols = null;
+  for (const L of lines) {
+    const line = L.text.replace(/\s+/g, ' ').trim();
+    if (L.items) {   // remember where the Debit / Credit / Balance headings sit on the page
+      const c = x => x.x + (x.w || 0) / 2, o = L.items.find(i => OUT_HEAD.test(i.s.trim())), n = L.items.find(i => IN_HEAD.test(i.s.trim())), b = L.items.find(i => BAL_HEAD.test(i.s.trim()));
+      if (o && n) { cols = {out: c(o), inn: c(n), bal: b ? c(b) : null}; continue; }
+    }
     const dm = DATE_AT_START.exec(line); if (!dm) continue;
     const date = parseDateStr(dm[1], +yearHint); if (!date) continue;
     let rest = line.slice(dm[0].length);
-    const amts = [...rest.matchAll(AMT_RE)].map(x => x[0]);
-    if (!amts.length) continue;
-    // with 2+ amounts the last one is usually the running balance
-    const hasBal = amts.length >= 2, amtStr = hasBal ? amts[amts.length - 2] : amts[0], bal = hasBal ? toNum(amts[amts.length - 1]) : null;
-    let a = toNum(amtStr); if (isNaN(a) || a === 0) continue;
-    let dir = null;
-    if (a < 0) dir = 'exp';
-    else if (hasBal && prevBal != null && !isNaN(bal)) dir = Math.abs(prevBal + a - bal) < 0.02 ? 'inc' : Math.abs(prevBal - a - bal) < 0.02 ? 'exp' : null;
-    amts.forEach(x => { rest = rest.replace(x, ' '); });
-    let desc = rest.replace(/\b(PHP|Php)\b/g, '').replace(/\s+/g, ' ').replace(/^[\s|:-]+|[\s|:-]+$/g, '');
-    while (/\s\d{4,}$/.test(desc)) desc = desc.replace(/\s\d{4,}$/, '');                  // drop trailing reference numbers
+    const found = [...rest.matchAll(AMT_RE)].map(x => ({s: x[0], end: x.index + x[0].length}));
+    if (!found.length) continue;
+    const hasBal = found.length >= 2, am = hasBal ? found[found.length - 2] : found[0];
+    const a = toNum(am.s), bal = hasBal ? toNum(found[found.length - 1].s) : null;
+    if (isNaN(a) || a === 0) continue;
+    let hint = null;
+    if (a < 0 || /^\s*-/.test(am.s) || /^\(/.test(am.s.trim())) hint = 'exp';
+    const suf = DRCR.exec(rest.slice(am.end)); if (!hint && suf) hint = /^D/i.test(suf[1]) ? 'exp' : 'inc';
+    if (!hint && /^\s*\+/.test(am.s)) hint = 'inc';
+    if (!hint && cols && L.items) {   // which column is the amount printed under?
+      const item = L.items.find(i => i.s.includes(am.s.trim().replace(/^[-+]/, '')) && !BAL_HEAD.test(i.s));
+      if (item) { const x = item.x + (item.w || 0) / 2; hint = Math.abs(x - cols.out) < Math.abs(x - cols.inn) ? 'exp' : 'inc'; }
+    }
+    found.forEach(x => { rest = rest.replace(x.s, ' '); });
+    let desc = rest.replace(/\b(PHP|Php)\b/g, '').replace(/\b(DR|CR)\b/g, '').replace(/\s+/g, ' ').replace(/^[\s|:-]+|[\s|:-]+$/g, '');
+    desc = desc.split(' ').filter(w => !/^[A-Za-z]{0,4}\d[\w-]{4,}$/.test(w) || !/\d{4,}/.test(w.replace(/-/g, ''))).join(' ').replace(/\s+/g, ' ').trim();
     desc = desc.slice(0, 80);
-    if (/\b(starting|beginning|opening|ending|closing|available|running)\s+balance\b|^balance\b|^total\b/i.test(desc)) { if (!isNaN(toNum(amts[amts.length - 1]))) prevBal = toNum(amts[amts.length - 1]); continue; }
-    if (!dir) dir = OUT_WORDS.test(desc) && !IN_WORDS.test(desc) ? 'exp' : IN_WORDS.test(desc) ? 'inc' : 'exp';
-    if (hasBal && !isNaN(bal)) prevBal = bal;
-    rows.push({date, desc: desc || (dir === 'inc' ? 'Money in' : 'Money out'), a: Math.abs(a), dir});
+    const isBalLine = /\b(starting|beginning|opening|ending|closing|available|running|previous)\s+balance\b|^balance\b|^total\b|balance (brought|carried) forward/i.test(desc);
+    raw.push({date, desc, a: Math.abs(a), bal: isNaN(bal) ? null : bal, hint, isBalLine});
   }
-  return rows;
+  // running balances: figure out whether the statement is oldest-first or newest-first, then read direction from the change
+  const fits = (prev, r) => prev == null || r.bal == null ? null : Math.abs(prev + r.a - r.bal) < 0.02 ? 'inc' : Math.abs(prev - r.a - r.bal) < 0.02 ? 'exp' : null;
+  const score = list => { let p = null, n = 0; for (const r of list) { if (!r.isBalLine && fits(p, r)) n++; if (r.bal != null) p = r.bal; } return n; };
+  const fwd = score(raw), rev = score([...raw].reverse()), order = rev > fwd ? [...raw].reverse() : raw;
+  let prev = null;
+  for (const r of order) { if (!r.isBalLine && !r.hint) r.byBal = fits(prev, r); if (r.bal != null) prev = r.bal; }
+  return raw.filter(r => !r.isBalLine).map(r => {
+    const dir = r.hint || r.byBal || (IN_WORDS.test(r.desc) && !OUT_WORDS.test(r.desc) ? 'inc' : OUT_WORDS.test(r.desc) ? 'exp' : 'exp');
+    return {date: r.date, desc: r.desc || (dir === 'inc' ? 'Money in' : 'Money out'), a: r.a, dir};
+  });
 }
 
 /* ---- CSV ---- */
@@ -868,13 +898,14 @@ function rowsFromTable(table, cols) {
       if (!isNaN(o) && o !== 0) { a = Math.abs(o); dir = 'exp'; } else if (!isNaN(i) && i !== 0) { a = Math.abs(i); dir = 'inc'; }
     }
     if (isNaN(a) && cols.amt >= 0) {
-      const v = toNum(r[cols.amt]); if (!isNaN(v) && v !== 0) { a = Math.abs(v); dir = v < 0 ? 'exp' : null; }
+      const cell = String(r[cols.amt]), v = toNum(cell);
+      if (!isNaN(v) && v !== 0) { a = Math.abs(v); dir = v < 0 || /\bD(R|EBIT)?\b/i.test(cell) ? 'exp' : /\bC(R|REDIT)?\b/i.test(cell) || /^\s*\+/.test(cell) ? 'inc' : null; }
     }
     if (isNaN(a)) continue;
     const desc = (cols.desc >= 0 ? r[cols.desc] : '').trim().slice(0, 80);
-    if (!dir && cols.type >= 0) { const t = String(r[cols.type]).toLowerCase(); dir = /\b(dr|debit|out|sent|payment|withdraw)/.test(t) ? 'exp' : /\b(cr|credit|in|received|deposit)/.test(t) ? 'inc' : null; }
+    if (!dir && cols.type >= 0) { const t = String(r[cols.type]).toLowerCase(); dir = /\b(dr|d|debit|out|outgoing|sent|send|payment|withdraw|purchase|transfer to)/.test(t) ? 'exp' : /\b(cr|c|credit|in|incoming|received|receive|deposit|cash in|refund)/.test(t) ? 'inc' : null; }
     if (!dir) dir = IN_WORDS.test(desc) && !OUT_WORDS.test(desc) ? 'inc' : 'exp';
-    rows.push({date, desc: desc || (dir === 'inc' ? 'Money in' : 'Money out'), a, dir});
+    rows.push({date, desc: desc || (dir === 'inc' ? 'Money in' : 'Money out'), a, dir, guessed: true});
   }
   return rows;
 }
@@ -901,9 +932,9 @@ async function pdfLines(buf, password) {
       if (!it.str.trim()) continue;
       const y = Math.round(it.transform[5] / 3) * 3;                     // group items on the same line
       if (!rows.has(y)) rows.set(y, []);
-      rows.get(y).push({x: it.transform[4], s: it.str});
+      rows.get(y).push({x: it.transform[4], w: it.width || 0, s: it.str});
     }
-    [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([, items]) => lines.push(items.sort((a, b) => a.x - b.x).map(i => i.s).join(' ')));
+    [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([, items]) => { items.sort((a, b) => a.x - b.x); lines.push({text: items.map(i => i.s).join(' '), items}); });
   }
   return lines;
 }
@@ -988,7 +1019,7 @@ function reviewRows(rows, source) {
   imp = {rows, source};
   openSheet(`<div class="sheethead"><h2>Review ${rows.length} transactions</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
     <p class="muted">Tap ↓ / ↑ to switch money in or out. Untick anything you don’t want. Rows already in Pera are unticked.</p>
-    <div class="imptools"><button class="ghost" data-act="imp-all-on">Select all</button><button class="ghost" data-act="imp-all-off">Select none</button></div>
+    <div class="imptools"><button class="ghost" data-act="imp-all-on">Select all</button><button class="ghost" data-act="imp-all-off">Select none</button><button class="ghost" data-act="imp-flip" style="margin-left:auto">⇅ Flip all</button></div>
     <ul class="list implist" id="impList"></ul>
     <p class="muted" id="impSum"></p>
     <button class="go" id="impGo" data-act="imp-go"></button>`, () => renderReview());
@@ -1067,6 +1098,7 @@ document.addEventListener('click', e => {
     case 'imp-all-on': if (imp) { imp.rows.forEach(r => { r.on = true; }); renderReview(); } return;
     case 'imp-all-off': if (imp) { imp.rows.forEach(r => { r.on = false; }); renderReview(); } return;
     case 'imp-go': return importRows();
+    case 'imp-flip': if (imp) { imp.rows.forEach(r => { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; r.dup = isDup(r); }); renderReview(); } return;
     case 'imp-all': return importApply('all');
     case 'acct': return acctForm(j);
     case 'bill-pay': { const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta'); return; }
