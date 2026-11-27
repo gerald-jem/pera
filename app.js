@@ -17,7 +17,17 @@ const parseAmt = s => {
 };
 const store = {
   get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  set(k, v) {
+    const txt = JSON.stringify(v);
+    for (let tries = 0; tries < 8; tries++) {
+      try { localStorage.setItem(k, txt); return true; }
+      catch (e) {   // storage full: drop the oldest safety copy and try again
+        const sk = Object.keys(localStorage).find(x => x.startsWith('pera:snaps:') && x !== k); if (!sk) return false;
+        try { const l = JSON.parse(localStorage.getItem(sk)) || []; if (l.length > 1) localStorage.setItem(sk, JSON.stringify(l.slice(0, l.length - 1))); else localStorage.removeItem(sk); } catch { localStorage.removeItem(sk); }
+      }
+    }
+    return false;
+  },
   del(k) { try { localStorage.removeItem(k); } catch {} },
 };
 const today = () => new Date();
@@ -136,7 +146,7 @@ function commit(...keys) { keys.forEach(k => dirty.add(k)); saveLocal(); render(
 async function pull() {
   if (!sb || !user) return false;
   const {data, error} = await sb.from('pera_docs').select('key,data');
-  if (error) { setSync(navigator.onLine ? 'error' : 'offline'); return false; }
+  if (error) { await syncFailed(error); return false; }
   const remote = new Map(data.map(r => [r.key, r.data]));
   // keep a safety copy before the server's version replaces anything on this device
   const changes = [...remote].some(([k, v]) => !dirty.has(k) && J(v) !== J(k === 'meta' ? S.meta : (S.years[k.slice(1)] ? {months: S.years[k.slice(1)]} : null)));
@@ -189,16 +199,28 @@ async function push() {
     }
     setSync(dirty.size ? 'error' : 'idle');
   } catch (e) {
-    console.warn('sync failed', e);
-    setSync(navigator.onLine ? 'error' : 'offline');
+    pushing = false; await syncFailed(e);
   } finally { pushing = false; }
+}
+let syncErr = null;   // last real error from the server, shown in Settings
+const isAuthErr = e => e && (e.status === 401 || e.code === 'PGRST301' || e.code === 'PGRST303' || /jwt|token|not authenticated|refresh/i.test(e.message || ''));
+async function syncFailed(e) {
+  console.warn('sync failed', e);
+  if (!navigator.onLine) { syncErr = null; setSync('offline'); return; }
+  syncErr = {msg: (e && (e.message || e.error_description || e.code)) || String(e), at: Date.now(), auth: isAuthErr(e)};
+  if (syncErr.auth && sb) {   // the sign-in expired: try to renew it once
+    const {error} = await sb.auth.refreshSession().catch(x => ({error: x}));
+    if (!error) { syncErr = null; setSync('saving'); setTimeout(() => push(), 300); return; }
+  }
+  setSync(syncErr.auth ? 'auth' : 'error');
 }
 function setSync(s) {
   syncState = s;
   const el = $('sync'), n = dirty.size;
   el.className = 'sync ' + (s === 'idle' ? 'ok' : 'wait');
   $('syncTxt').textContent = s === 'idle' ? 'Synced' : s === 'saving' ? 'Saving…'
-    : s === 'offline' ? `Offline · ${n} change${n === 1 ? '' : 's'} waiting` : 'Not synced · tap Settings';
+    : s === 'offline' ? `Offline · ${n} change${n === 1 ? '' : 's'} waiting` : s === 'auth' ? 'Sign in again to sync' : 'Not synced · tap for details';
+  if (s === 'idle') syncErr = null;
 }
 addEventListener('online', () => push());
 document.addEventListener('visibilitychange', () => { if (!document.hidden && user) { pull().then(() => push()); } });
@@ -1250,14 +1272,53 @@ function openSheet(html, onReady) {
   sheetMonth = null; sheetPot = null; sheetBill = null;
   $('sheetBody').innerHTML = html;
   $('scrim').classList.add('on'); $('sheet').classList.add('on'); document.body.classList.add('locked');
+  $('sheet').style.transform = ''; $('scrim').style.opacity = '';
+  if (!sheetOpen && !(history.state && history.state.peraSheet)) history.pushState({peraSheet: 1}, '');   // phone Back closes it
   sheetOpen = true;
   if (onReady) onReady($('sheetBody'));
 }
-function closeSheet() {
+let skipPop = 0;
+function closeSheet(fromBack) {
+  if (!sheetOpen) return;
   $('scrim').classList.remove('on'); $('sheet').classList.remove('on'); document.body.classList.remove('locked');
+  $('sheet').style.transform = ''; $('sheet').style.transition = ''; $('scrim').style.opacity = '';
   sheetOpen = false; sheetMonth = null; sheetPot = null; sheetBill = null;
+  if (fromBack !== true && history.state && history.state.peraSheet) { skipPop++; history.back(); }
 }
-$('scrim').addEventListener('click', closeSheet);
+addEventListener('popstate', () => {
+  if (skipPop) { skipPop--; if (sheetOpen) history.pushState({peraSheet: 1}, ''); return; }   // a new sheet opened meanwhile
+  if (sheetOpen) closeSheet(true);
+});
+// swipe the sheet down to close it (from the handle/title, or anywhere once scrolled to the top)
+(() => {
+  const sh = $('sheet'); let y0 = null, dy = 0, t0 = 0, drag = false;
+  sh.addEventListener('touchstart', e => {
+    if (desk.matches || e.touches.length !== 1) return;
+    const top = e.target.closest('.grab, .sheethead');
+    if (!top && sh.scrollTop > 0) { y0 = null; return; }
+    if (e.target.closest('input, select, textarea, .chips, .cyclechips')) { y0 = null; return; }
+    y0 = e.touches[0].clientY; dy = 0; t0 = Date.now(); drag = false;
+  }, {passive: true});
+  sh.addEventListener('touchmove', e => {
+    if (y0 == null) return;
+    dy = e.touches[0].clientY - y0;
+    if (!drag && (dy < 8 || sh.scrollTop > 0)) { if (dy < -4) y0 = null; return; }
+    drag = true; e.preventDefault();
+    sh.style.transition = 'none'; sh.style.transform = `translateY(${Math.max(0, dy)}px)`;
+    $('scrim').style.opacity = String(Math.max(0.15, 1 - dy / (sh.offsetHeight || 600)));
+  }, {passive: false});
+  const end = () => {
+    if (y0 == null) return; y0 = null;
+    if (!drag) return; drag = false;
+    const fast = dy > 40 && dy / Math.max(1, Date.now() - t0) > 0.6;
+    sh.style.transition = '';
+    if (dy > Math.min(140, sh.offsetHeight * 0.25) || fast) closeSheet();
+    else { sh.style.transform = ''; $('scrim').style.opacity = ''; }
+  };
+  sh.addEventListener('touchend', end); sh.addEventListener('touchcancel', end);
+})();
+$('scrim').addEventListener('click', () => closeSheet());
+$('sync').addEventListener('click', () => { if (user) settings(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetOpen) closeSheet(); });
 
 let toastTimer;
@@ -1568,7 +1629,9 @@ function settings() {
   const n = dirty.size;
   openSheet(`<div class="sheethead"><h2>Settings</h2><button type="button" class="ghost" data-act="close">Done</button></div>
     <p class="muted">Signed in as <b style="color:var(--ink)">${esc(user && user.email)}</b></p>
-    <div class="note">${syncState === 'idle' ? 'Everything is synced.' : `${n} change${n === 1 ? '' : 's'} saved on this phone, waiting to upload.`}</div>
+    <div class="note">${syncState === 'idle' ? 'Everything is synced.' : `${n} change${n === 1 ? '' : 's'} saved on this phone, waiting to upload.`}
+      ${syncErr ? `<br><span class="dn">${syncErr.auth ? 'Your sign-in expired. Sign out and back in; nothing on this phone is lost.' : 'The server said: ' + esc(syncErr.msg)}</span>` : ''}</div>
+    ${syncErr && syncErr.auth ? '<button class="go" data-act="signout">Sign in again</button>' : ''}
     <button class="go" data-act="sync-now">Sync now</button>
     <h2>App lock</h2>
     <div class="switchrow"><span><b>Lock with fingerprint</b><br><span class="muted">Asks for your fingerprint or face when you open Pera and after a minute away. This device only.</span></span>
@@ -2339,7 +2402,7 @@ document.addEventListener('click', e => {
     case 'bill-del': return removeBill(+j);
     case 'bill-add': return billForm(null);
     case 'qb-name': { const q = $('qb'); q.value = d.n + ' '; q.focus(); quickPreview(); return; }
-    case 'sync-now': pull().then(() => push()).then(() => { closeSheet(); toast(dirty.size ? 'Still offline — will retry' : 'Synced'); }); return;
+    case 'sync-now': pull().then(() => push()).then(() => { closeSheet(); toast(!dirty.size && !syncErr ? 'Synced' : !navigator.onLine ? 'Offline — will sync when you’re back online' : syncErr ? (syncErr.auth ? 'Couldn’t sync: sign-in expired. Sign in again in Settings' : `Couldn’t sync: ${syncErr.msg}`) : 'Couldn’t sync yet — will retry'); }); return;
     case 'export': return exportData();
     case 'signout': closeSheet(); return sb.auth.signOut();
   }

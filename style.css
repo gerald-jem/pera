@@ -357,3 +357,5 @@ label small.muted{font-weight:400}
 .perbill li{display:block;padding:0}
 .pbrow{all:unset;cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto 14px;gap:10px;align-items:center;width:100%;padding:9px 0;box-sizing:border-box}.pbrow:focus-visible{outline:2px solid var(--blue)}
 .pbrow small{display:block;font-size:12px;color:var(--mute)}.pbrow b{font-variant-numeric:tabular-nums;white-space:nowrap}.pbrow .chev{color:var(--mute)}
+.grab{height:5px;position:relative}.grab::after{content:"";position:absolute;left:-30px;right:-30px;top:-14px;bottom:-14px}
+#sync{cursor:pointer}
