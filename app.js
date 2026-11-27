@@ -248,6 +248,38 @@ function series() {
 }
 
 /* ================= render ================= */
+/* ---- motion: screens slide in, numbers count, lines draw (off when the phone asks for less motion) ---- */
+const calm = matchMedia('(prefers-reduced-motion: reduce)');
+const shown = new Map();   // last value each counter showed
+let entering = true;       // first paint counts up too
+const counting = new Map();   // key → running count, so a redraw mid-count carries on instead of jumping
+function animateCounts() {
+  document.querySelectorAll('[data-count]').forEach(el => {
+    const key = el.dataset.count, to = +el.dataset.n, dec = +el.dataset.d || 0, prev = shown.get(key), run = counting.get(key);
+    shown.set(key, to);
+    if (calm.matches || !isFinite(to) || el.offsetParent === null) return;
+    if (run && run.to === to && !entering) { run.el = el; el.textContent = run.now; return; }   // same count, new element
+    const from = entering ? 0 : run ? run.cur : prev; if (from == null || Math.abs(from - to) < 0.005) return;
+    const a = {to, from, cur: from, now: peso(from, dec), el, t0: performance.now(), dur: entering ? 750 : 450};
+    counting.set(key, a);
+    const step = t => {
+      if (counting.get(key) !== a) return;
+      const k = Math.min(1, (t - a.t0) / a.dur), e = 1 - Math.pow(1 - k, 3);
+      a.cur = a.from + (a.to - a.from) * e; a.now = peso(a.cur, dec);
+      if (a.el.dataset.count === key) a.el.textContent = a.now;
+      if (k < 1) requestAnimationFrame(step); else counting.delete(key);
+    };
+    requestAnimationFrame(step);
+  });
+}
+function enterView(v) {
+  if (calm.matches) return;
+  const el = document.getElementById('v-' + v); if (!el) return;
+  el.classList.remove('enter'); void el.offsetWidth; el.classList.add('enter');
+  clearTimeout(el._enter); el._enter = setTimeout(() => el.classList.remove('enter'), 900);
+  entering = true; requestAnimationFrame(() => { animateCounts(); entering = false; });
+  const c = $('chart'); if (v === 'home' && c) { c.classList.remove('drawn'); void c.getBoundingClientRect(); c.classList.add('drawn'); clearTimeout(c._d); c._d = setTimeout(() => c.classList.remove('drawn'), 1300); }
+}
 function render() {
   const ser = series();
   renderHome(ser); renderInsights(ser); renderMonths(ser); renderSavings(); renderBills();
@@ -255,6 +287,7 @@ function render() {
   else if (sheetOpen && sheetMonth && S.years[sheetMonth.y]) $('sheetBody').innerHTML = monthHTML(sheetMonth.y, sheetMonth.i, ser);
   if (sheetOpen && sheetPot) potSheet(sheetPot.id, sheetPot.k);
   if (sheetOpen && sheetBill) $('sheetBody').innerHTML = billGroupHTML(sheetBill);
+  if (!entering) animateCounts();
 }
 function renderHome(ser) {
   const cur = ser.find(p => p.now) || ser.filter(p => p.past).pop() || ser[0];
@@ -271,6 +304,7 @@ function renderHome(ser) {
   }
   $('homeLbl').textContent = `Total money · end of ${M[cur.i]} ${cur.y}`;
   $('homeTotal').textContent = hideTotal ? '₱ ••••••' : peso(cur.total, 2);
+  if (hideTotal) delete $('homeTotal').dataset.count; else Object.assign($('homeTotal').dataset, {count: 'total', n: cur.total, d: 2});
   $('homeTotal').classList.toggle('masked', hideTotal);
   setEye();
   const prev = ser[ser.indexOf(cur) - 1];
@@ -302,7 +336,7 @@ function homeMonth(cur, prev) {
   const tick = isNow && cur.inc > 0 ? Math.min(100, day / days * 100) : null;
   box.hidden = false;
   box.innerHTML = `<div class="hhead"><h3>${isNow ? 'This month' : M[cur.i] + ' ' + cur.y}</h3>${isNow ? `<span class="muted">Day ${day} of ${days}</span>` : ''}</div>
-    <div class="leftnum"><b class="${over ? 'dn' : ''}">${esc(peso(Math.abs(left)))}</b><span>${over ? 'more went out than came in' : cur.inc ? 'left after spending and saving' : 'no income added yet'}</span></div>
+    <div class="leftnum"><b class="${over ? 'dn' : ''}" data-count="left" data-n="${Math.abs(left)}" data-d="0">${esc(peso(Math.abs(left)))}</b><span>${over ? 'more went out than came in' : cur.inc ? 'left after spending and saving' : 'no income added yet'}</span></div>
     <div class="pbar${over ? ' over' : ''}" role="img" aria-label="${Math.round(pct)}% of income used"><b style="width:${pct.toFixed(1)}%"></b>${tick != null ? `<i style="left:${tick.toFixed(1)}%" title="Even pace for day ${day}"></i>` : ''}</div>
     <div class="pmeta"><span>${cur.inc ? Math.round(out / cur.inc * 100) + '% of income used' : ''}</span>${tick != null ? '<span class="muted">┆ even pace</span>' : ''}</div>
     ${pace ? `<p class="pace">${pace}</p>` : ''}
@@ -380,7 +414,7 @@ function drawChart() {
   const yrs = [...new Set(ser.map(p => p.y))].map(y => { const j = ser.findIndex(p => p.y === y); return `<line x1="${X(j)}" x2="${X(j)}" y1="${pt}" y2="${H - pb}" stroke="var(--line)"/><text x="${X(j) + 3}" y="${H - 6}" font-size="11" fill="var(--mute)">${esc(y)}</text>`; }).join('');
   const last = ser[ser.length - 1], kx = X(k), anchor = kx > W * 0.7 ? 'end' : kx < W * 0.3 ? 'start' : 'middle';
   s.innerHTML = `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--blue)" stop-opacity=".22"/><stop offset="1" stop-color="var(--blue)" stop-opacity="0"/></linearGradient></defs>${yrs}
-  <path d="${area}" fill="url(#g)"/><path d="${path(0, k)}" fill="none" stroke="var(--blue)" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="${area}" fill="url(#g)"/><path class="cline" pathLength="1" d="${path(0, k)}" fill="none" stroke="var(--blue)" stroke-width="2.5" stroke-linejoin="round"/>
   ${k < ser.length - 1 ? `<path d="${path(k, ser.length - 1)}" fill="none" stroke="var(--blue)" stroke-width="2" stroke-dasharray="4 5" opacity=".65"/>` : ''}
   <circle cx="${kx}" cy="${Y(ser[k].total)}" r="5" fill="var(--bg)" stroke="var(--blue)" stroke-width="2.5"/>
   <text x="${kx}" y="${Math.max(13, Y(ser[k].total) - 10)}" text-anchor="${anchor}" font-size="12" font-weight="600" fill="var(--ink)">Now</text>
@@ -420,7 +454,7 @@ function billTotals(now) {
   const by = {}; un.forEach(x => { const k = x.name.toLowerCase(), e = by[k] = by[k] || {name: x.name, a: 0, n: 0, last: x.due, next: null}; e.a += +x.a; e.n++; if (x.due > e.last) e.last = x.due; if (x.due >= t && (!e.next || x.due < e.next.due)) e.next = x; });
   const per = Object.values(by).sort((p, q) => q.a - p.a);
   box.hidden = false;
-  box.innerHTML = `<div class="muted">Unpaid bills</div><div class="big billbig">${esc(peso(sum(un), 2))}</div>
+  box.innerHTML = `<div class="muted">Unpaid bills</div><div class="big billbig" data-count="bills" data-n="${sum(un)}" data-d="2">${esc(peso(sum(un), 2))}</div>
     <div class="muted">${un.length} payment${un.length === 1 ? '' : 's'}${late.length ? ` · <span class="dn">${esc(peso(sum(late), 2))} past due</span> <button class="plain inl" data-act="bills-late-paid">Mark all paid</button>` : ''}</div>
     <div class="trio billtrio"><div class="tile"><span>This month</span><b class="dn">${esc(pesoS(sum(thisM)))}</b><small>${M[cm.i].slice(0, 3)} · ${thisM.length} bill${thisM.length === 1 ? '' : 's'}</small></div><div class="tile"><span>Next month</span><b>${esc(pesoS(sum(nextM)))}</b><small>${M[nm.i].slice(0, 3)} · ${nextM.length} bill${nextM.length === 1 ? '' : 's'}</small></div><div class="tile"><span>Later</span><b>${esc(pesoS(sum(later)))}</b><small>${later.length} bill${later.length === 1 ? '' : 's'}</small></div></div>
     <details class="perbill"${per.length <= 4 ? ' open' : ''}><summary>By bill</summary><ul>${per.map(e => `<li><button class="pbrow" data-act="bill-group" data-n="${esc(e.name)}"><span>${esc(e.name)}<small>${e.n} left${e.next ? ` · next ${esc(fmtDate(e.next.due, {month: 'short', day: 'numeric'}))} ${esc(peso(+e.next.a, 2))}` : ''}${e.n > 1 ? ` · until ${esc(fmtDate(e.last, {month: 'short', year: 'numeric'}))}` : ''}</small></span><b>${esc(peso(e.a, 2))}</b><span class="chev">›</span></button></li>`).join('')}</ul></details>`;
@@ -720,7 +754,7 @@ function renderSavings() {
     return `<button class="card potcard" data-act="pot-open" data-p="${esc(p.id)}"><div class="muted">${esc(p.name)} · ${esc(KIND[p.kind])}</div>
       <div class="serif" style="font-size:28px">${esc(peso(big, 2))}</div>${bar != null ? `<div class="bar"><i style="width:${(bar * 100).toFixed(1)}%"></i></div>` : ''}<div class="muted">${sub}</div></button>`;
   };
-  w.innerHTML = `<div class="savtotal"><div class="muted">In savings now</div><div class="big" style="font-size:clamp(34px,10vw,44px)">${esc(peso(total, 2))}</div>
+  w.innerHTML = `<div class="savtotal"><div class="muted">In savings now</div><div class="big" style="font-size:clamp(34px,10vw,44px)" data-count="sav" data-n="${total}" data-d="2">${esc(peso(total, 2))}</div>
       <p class="muted">Deposits here show as each month’s <b>Saved</b> in Months, but aren’t subtracted from total money — the transfer already shows as money out in your imported statement.</p></div>
     ${goalsHTML()}
     <h2 class="sech">Accounts</h2>
@@ -2327,6 +2361,7 @@ function showView(v) {
   window.scrollTo(0, 0);
   if (v === 'home') drawChart();
   store.set('pera:tab', v);
+  enterView(v);
 }
 document.addEventListener('click', e => {
   const tab = e.target.closest('.tab[data-v]'); if (tab) return showView(tab.dataset.v);
