@@ -69,7 +69,12 @@ async function pull() {
   const {data, error} = await sb.from('pera_docs').select('key,data');
   if (error) { setSync(navigator.onLine ? 'error' : 'offline'); return; }
   for (const row of data) if (!dirty.has(row.key)) applyDoc(row.key, row.data);
-  S.meta.years = [...new Set([...(S.meta.years || []), ...Object.keys(S.years)])].sort();
+  // a year that is no longer on the server (deleted on another device) goes here too
+  if (data.length) {
+    const remote = new Set(data.map(r => r.key));
+    for (const y of Object.keys(S.years)) if (!remote.has('y' + y) && !dirty.has('y' + y)) delete S.years[y];
+  }
+  S.meta.years = Object.keys(S.years).sort();
   saveLocal(); render();
 }
 async function push() {
@@ -79,12 +84,20 @@ async function push() {
   try {
     while (dirty.size) {
       const keys = [...dirty];
-      const rows = keys.map(key => ({user_id: user.id, key, data: docOf(key), updated_at: new Date().toISOString()}));
-      const snapshot = keys.map(k => JSON.stringify(docOf(k)));
-      const {error} = await sb.from('pera_docs').upsert(rows, {onConflict: 'user_id,key'});
-      if (error) throw error;
+      const gone = keys.filter(k => k !== 'meta' && !S.years[k.slice(1)]);   // deleted years
+      const live = keys.filter(k => !gone.includes(k));
+      const snapshot = keys.map(k => JSON.stringify(gone.includes(k) ? null : docOf(k)));
+      if (gone.length) {
+        const {error} = await sb.from('pera_docs').delete().eq('user_id', user.id).in('key', gone);
+        if (error) throw error;
+      }
+      if (live.length) {
+        const rows = live.map(key => ({user_id: user.id, key, data: docOf(key), updated_at: new Date().toISOString()}));
+        const {error} = await sb.from('pera_docs').upsert(rows, {onConflict: 'user_id,key'});
+        if (error) throw error;
+      }
       // only clear keys that did not change again while uploading
-      keys.forEach((k, i) => { if (JSON.stringify(docOf(k)) === snapshot[i]) dirty.delete(k); });
+      keys.forEach((k, i) => { const now = k !== 'meta' && !S.years[k.slice(1)] ? null : docOf(k); if (JSON.stringify(now) === snapshot[i]) dirty.delete(k); });
       store.set(kDirty(), [...dirty]);
     }
     setSync('idle');
@@ -191,6 +204,7 @@ function renderMonths(ser) {
     <span class="t"><b>${M[p.i]}</b><small><span class="up">+${esc(pesoS(p.inc))}</span> · <span class="dn">−${esc(pesoS(p.exp))}</span> · saved ${esc(pesoS(p.sav))}</small></span>
     <span class="mr">${p.past ? 'Total' : 'Planned'}<b>${esc(peso(p.total))}</b></span></button></li>`).join('')
     || '<li class="empty">No months yet. Tap ＋ Year.</li>';
+  $('yearActions').innerHTML = rows.length ? `<button class="danger" data-act="year-del" data-y="${esc(selYear)}">Delete ${esc(selYear)}</button>` : '';
   $('yearFoot').textContent = rows.length ? `${selYear}: income ${peso(rows.reduce((a, p) => a + p.inc, 0))}, spent ${peso(rows.reduce((a, p) => a + p.exp, 0))}, saved ${peso(rows.reduce((a, p) => a + p.sav, 0))}.` : '';
 }
 
@@ -350,6 +364,22 @@ function billForm(j) {
     const del = $('bdel'); if (del) del.addEventListener('click', () => { closeSheet(); removeBill(j); });
   });
 }
+function confirmDeleteYear(y) {
+  const ms = S.years[y] || [], n = ms.reduce((t, m) => t + m.inc.length + m.exp.length, 0);
+  openSheet(`<div class="sheethead"><h2>Delete ${esc(y)}?</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    <p>This removes all 12 months of ${esc(y)}: ${n} income and expense entries plus the savings amounts, on every device.</p>
+    <p class="muted">Total money for later years will be recalculated without it. You can undo right after, or restore it from a backup.</p>
+    <button class="go" style="background:var(--red)" data-act="year-del-yes" data-y="${esc(y)}">Delete ${esc(y)}</button>`);
+}
+function deleteYear(y) {
+  const months = S.years[y]; if (!months) return closeSheet();
+  closeSheet();
+  delete S.years[y];
+  S.meta.years = Object.keys(S.years).sort();
+  if (detail && detail.y === y) detail = null;
+  commit('meta', 'y' + y);
+  toast(`${y} deleted`, () => { S.years[y] = months; S.meta.years = Object.keys(S.years).sort(); commit('meta', 'y' + y); });
+}
 function removeBill(j) {
   const [x] = S.meta.bills.splice(j, 1); commit('meta');
   toast(`${x.name} removed`, () => { S.meta.bills.splice(Math.min(j, S.meta.bills.length), 0, x); commit('meta'); });
@@ -439,6 +469,8 @@ document.addEventListener('click', e => {
       if (d.y === '+') { const ys = Object.keys(S.years).map(Number); const n = String(ys.length ? Math.max(...ys) + 1 : today().getFullYear()); ensureYear(n); selYear = n; commit(); }
       else { selYear = d.y; if (desk.matches) detail = {y: d.y, i: detail && detail.y === d.y ? detail.i : 0}; render(); }
       return;
+    case 'year-del': return confirmDeleteYear(d.y);
+    case 'year-del-yes': return deleteYear(d.y);
     case 'acct': return acctForm(j);
     case 'bill-pay': { const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta'); return; }
     case 'bill-edit': return billForm(+j);
