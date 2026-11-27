@@ -22,7 +22,11 @@ const store = {
 };
 const today = () => new Date();
 // a bill is repaid from the month BEFORE its due date (due Jan 5, 2027 → December 2026)
-const billMonth = due => { const d = new Date(due + 'T00:00:00'); d.setDate(1); d.setMonth(d.getMonth() - 1); return {y: String(d.getFullYear()), i: d.getMonth()}; };
+// which month pays a bill: paid every 15th & 30th → due on the 15th or later comes out of that month's pay,
+// due before the 15th comes out of the previous month's (S.meta.payCut, 0 = always the month before)
+const ord = n => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
+const payCut = () => { const c = S && S.meta && S.meta.payCut; return c == null ? 15 : +c; };
+const billMonth = due => { const d = new Date(due + 'T00:00:00'), cut = payCut(), same = cut > 0 && d.getDate() >= cut; d.setDate(1); if (!same) d.setMonth(d.getMonth() - 1); return {y: String(d.getFullYear()), i: d.getMonth()}; };
 const billsIn = (y, i) => (S.meta.bills || []).map((b, j) => ({...b, j})).filter(b => b.count !== false && !b.paid && b.due && (m => m.y === y && m.i === i)(billMonth(b.due)));
 
 /* ================= state ================= */
@@ -1448,7 +1452,7 @@ function renderDetail(ser) {
 
 function billForm(j) {
   const b = j == null ? {name: '', a: '', due: '', paid: false, count: true} : S.meta.bills[j];
-  const countLabel = due => { if (!due) return 'Count as an expense in the month before it’s due'; const m = billMonth(due); return `Count as an expense in ${M[m.i]} ${m.y}`; };
+  const countLabel = due => { if (!due) return payCut() ? `Count as an expense (due before the ${ord(payCut())}: the month before)` : 'Count as an expense in the month before it’s due'; const m = billMonth(due); return `Count as an expense in ${M[m.i]} ${m.y}`; };
   openSheet(`<div class="sheethead"><h2>${j == null ? 'Add a bill' : 'Edit bill'}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
     <form id="bf" novalidate><label for="bn">Name</label><input id="bn" maxlength="40" placeholder="SPayLater" value="${esc(b.name)}">
     <label for="ba">Amount</label><input id="ba" class="amtin" inputmode="decimal" value="${esc(b.a)}">
@@ -1534,6 +1538,10 @@ function settings() {
     <h2>App lock</h2>
     <div class="switchrow"><span><b>Lock with fingerprint</b><br><span class="muted">Asks for your fingerprint or face when you open Pera and after a minute away. This device only.</span></span>
       <button class="switch" role="switch" aria-checked="${!!lockState}" data-act="lock-toggle" aria-label="Lock with fingerprint"></button></div>
+    <h2>Bills</h2>
+    <label for="payCut">Which month a bill counts in</label>
+    <select id="payCut">${[[15, 'Paid 15th & 30th: due on the 15th or later counts that month'], ...[5, 10, 20, 25].map(d => [d, `Due on the ${ord(d)} or later counts that month`]), [0, 'Always the month before it’s due']].map(([v, l]) => `<option value="${v}" ${payCut() === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+    <p class="muted" id="payCutEx"></p>
     <h2>Bank statements</h2>
     <button class="go" data-act="statement">Import a bank statement</button>
     <p class="muted">Excel, PDF or CSV from your bank, GCash or Maya, including password-locked ones.</p>
@@ -1547,6 +1555,13 @@ function settings() {
     <h2>Install on your phone</h2>
     <p class="muted"><b>iPhone:</b> in Safari tap Share → Add to Home Screen.<br><b>Android:</b> in Chrome tap ⋮ → Install app (or Add to Home screen).</p>
     <button class="danger" data-act="signout">Sign out</button>`, () => {
+    const ex = () => { const c = payCut(); $('payCutEx').textContent = c ? `A bill due Jan ${c} counts in January; one due Jan ${Math.max(1, c - 10)} counts in December, paid from the 30th.` : 'A bill due Jan 16 counts in December.'; };
+    ex();
+    $('payCut').addEventListener('change', () => {
+      const old = S.meta.payCut; S.meta.payCut = +$('payCut').value;
+      const keys = new Set(['meta']); (S.meta.bills || []).forEach(b => { if (b.due) { const m = billMonth(b.due); if (!S.years[m.y]) { ensureYear(m.y); keys.add('y' + m.y); } } });
+      commit(...keys); ex(); toast('Bills moved to their new months', () => { S.meta.payCut = old; commit('meta'); settings(); });
+    });
     $('importFile').addEventListener('change', async e => {
       const f = e.target.files[0]; if (!f) return;
       try { importData(JSON.parse(await f.text())); }
