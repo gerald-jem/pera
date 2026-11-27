@@ -861,6 +861,9 @@ function settings() {
     <p class="muted">Signed in as <b style="color:var(--ink)">${esc(user && user.email)}</b></p>
     <div class="note">${syncState === 'idle' ? 'Everything is synced.' : `${n} change${n === 1 ? '' : 's'} saved on this phone, waiting to upload.`}</div>
     <button class="go" data-act="sync-now">Sync now</button>
+    <h2>App lock</h2>
+    <div class="switchrow"><span><b>Lock with fingerprint</b><br><span class="muted">Asks for your fingerprint or face when you open Pera and after a minute away. This device only.</span></span>
+      <button class="switch" role="switch" aria-checked="${!!lockState}" data-act="lock-toggle" aria-label="Lock with fingerprint"></button></div>
     <h2>Bank statements</h2>
     <button class="go" data-act="statement">Import a bank statement</button>
     <p class="muted">Excel, PDF or CSV from your bank, GCash or Maya, including password-locked ones.</p>
@@ -1366,6 +1369,7 @@ document.addEventListener('click', e => {
   const d = el.dataset, j = d.j;
   switch (d.act) {
     case 'close': return closeSheet();
+    case 'lock-toggle': { if (lockState) { disableLock(); settings(); } else enableLock().then(() => settings()); return; }
     case 'eye': hideTotal = !hideTotal; store.set('pera:hideTotal', hideTotal); render(); return;
     case 'fab': closeSheet(); return entryForm({});
     case 'settings': return settings();
@@ -1440,6 +1444,60 @@ document.addEventListener('keydown', e => {
 });
 desk.addEventListener('change', () => { closeSheet(); if (user) render(); });
 
+
+/* ================= app lock: fingerprint / face unlock via a passkey on this device ================= */
+// Locks the screen on open and after a minute in the background. It hides the app; it doesn't encrypt stored data.
+const LOCK_KEY = 'pera:lock', LOCK_AFTER = 60 * 1000;
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+let lockState = store.get(LOCK_KEY), locked = false, hiddenAt = 0, unlocking = false;
+async function lockSupported() {
+  try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch { return false; }
+}
+async function enableLock() {
+  if (!(await lockSupported())) { toast('This device or browser can’t use fingerprint unlock'); return false; }
+  try {
+    const cred = await navigator.credentials.create({publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: {name: 'Pera', id: location.hostname},
+      user: {id: new TextEncoder().encode((user && user.id) || 'pera').slice(0, 64), name: (user && user.email) || 'Pera', displayName: 'Pera app lock'},
+      pubKeyCredParams: [{type: 'public-key', alg: -7}, {type: 'public-key', alg: -257}],
+      authenticatorSelection: {authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged'},
+      timeout: 60000, attestation: 'none'}});
+    lockState = {id: b64u(cred.rawId), at: Date.now()}; store.set(LOCK_KEY, lockState);
+    toast('App lock is on'); return true;
+  } catch (e) { if (e && e.name !== 'NotAllowedError') toast('Couldn’t set up fingerprint unlock'); return false; }
+}
+function disableLock() { lockState = null; store.del(LOCK_KEY); document.documentElement.classList.remove('applock'); toast('App lock is off'); }
+function showLock() {
+  if (!lockState || !user) return;
+  locked = true; closeSheet(); hideToast();
+  document.documentElement.classList.add('applock');
+  $('lockScreen').hidden = false; $('lockErr').textContent = ''; $('lockPwF').hidden = true; $('lockAlt').hidden = false; $('lockGo').hidden = false;
+  tryUnlock();
+}
+function unlockNow() { locked = false; $('lockScreen').hidden = true; document.documentElement.classList.remove('applock'); drawChart(); }
+async function tryUnlock() {
+  if (unlocking || !lockState) return; unlocking = true; $('lockErr').textContent = '';
+  try {
+    await navigator.credentials.get({publicKey: {challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname,
+      allowCredentials: [{type: 'public-key', id: unb64u(lockState.id), transports: ['internal']}], userVerification: 'required', timeout: 60000}});
+    unlockNow();
+  } catch (e) { $('lockErr').textContent = e && e.name === 'NotAllowedError' ? 'Not unlocked. Tap Unlock to try again.' : 'Fingerprint unlock isn’t available right now. Use your password.'; }
+  finally { unlocking = false; }
+}
+$('lockGo').addEventListener('click', tryUnlock);
+$('lockAlt').addEventListener('click', () => { $('lockPwF').hidden = false; $('lockAlt').hidden = true; $('lockPw').focus(); });
+$('lockPwF').addEventListener('submit', async e => {
+  e.preventDefault(); if (!sb || !user) return;
+  const {error} = await sb.auth.signInWithPassword({email: user.email, password: $('lockPw').value});
+  if (error) { $('lockErr').textContent = 'Wrong password.'; return; }
+  $('lockPw').value = ''; unlockNow();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (lockState && user && !locked && hiddenAt && Date.now() - hiddenAt > LOCK_AFTER) showLock();
+});
 /* ================= auth ================= */
 let signUpMode = false;
 function showAuth(msg) {
@@ -1472,10 +1530,10 @@ $('authForm').addEventListener('submit', async e => {
 
 async function start(u) {
   if (user && user.id === u.id) return;
-  user = u; loadLocal(); purgeTrash(); purgeCycleTrash(); if (migrateSavings()) { dirty.add('meta'); saveLocal(); } showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
+  user = u; if (lockState) showLock(); loadLocal(); purgeTrash(); purgeCycleTrash(); if (migrateSavings()) { dirty.add('meta'); saveLocal(); } showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
   await push(); await pull();
 }
-function stop(msg) { hideToast(); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
+function stop(msg) { hideToast(); locked = false; $('lockScreen').hidden = true; document.documentElement.classList.remove('applock'); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
 
 if (!sb) {
   showAuth('Setup needed: add your Supabase URL and anon key to config.js.');
