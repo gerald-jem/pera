@@ -524,6 +524,29 @@ function billForm(j) {
     const del = $('bdel'); if (del) del.addEventListener('click', () => { closeSheet(); removeBill(j); });
   });
 }
+function addYearSheet() {
+  const have = Object.keys(S.years).map(Number), cy = today().getFullYear();
+  const lo = have.length ? Math.min(...have) : cy, hi = have.length ? Math.max(...have) : cy;
+  const quick = [...new Set([lo - 2, lo - 1, hi + 1, cy - 1, cy, cy + 1])].filter(y => !have.includes(y)).sort();
+  const binned = (S.meta.trash || []).map(t => t.y);
+  const btn = y => binned.includes(String(y))
+    ? `<button class="chip" data-act="bin-restore" data-y="${y}">${y} · restore from bin</button>`
+    : `<button class="chip" data-act="year-add" data-y="${y}">${y}${y < lo ? ' · earlier' : ''}</button>`;
+  openSheet(`<div class="sheethead"><h2>Add a year</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    <div class="chips" style="margin:6px 0 4px">${quick.map(btn).join('')}</div>
+    <label for="yrAny">Or any year</label>
+    <div class="qrow" style="display:flex;gap:8px"><select id="yrAny" style="flex:1">${Array.from({length: 31}, (_, k) => cy - 20 + k).filter(y => !have.includes(y)).map(y => `<option ${y === lo - 1 ? 'selected' : ''}>${y}</option>`).join('')}</select>
+    <button class="go" style="width:auto;margin:0;padding:0 22px" type="button" id="yrGo">Add</button></div>
+    <p class="muted">Adding an earlier year changes the totals for later years: whatever is left at the end of it carries forward.${binned.length ? ' Years in the recycle bin can be restored with their entries.' : ''}</p>`, () => {
+    $('yrGo').addEventListener('click', () => { const y = $('yrAny').value; binned.includes(y) ? restoreYear(y) : addYear(y); });
+  });
+}
+function addYear(y) {
+  y = String(y); if (S.years[y]) return;
+  ensureYear(y); selYear = y; if (desk.matches) detail = {y, i: 0};
+  closeSheet(); commit();
+  toast(`${y} added`, () => { delete S.years[y]; S.meta.years = Object.keys(S.years).sort(); commit('meta', 'y' + y); });
+}
 function confirmDeleteYear(y) {
   const ms = S.years[y] || [], n = ms.reduce((t, m) => t + m.inc.length + m.exp.length, 0);
   openSheet(`<div class="sheethead"><h2>Delete ${esc(y)}?</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
@@ -646,6 +669,7 @@ function restoreYear(y, quiet) {
   S.meta.trash = S.meta.trash.filter(t => t !== it);
   S.meta.years = Object.keys(S.years).sort();
   if (sheetOpen) closeSheet();
+  selYear = y;
   commit('meta', 'y' + y);
   if (!quiet) toast(`${y} restored`);
 }
@@ -1090,7 +1114,7 @@ document.addEventListener('click', e => {
     }
     case 'month': return monthSheet(selYear, +d.i);
     case 'year':
-      if (d.y === '+') { const ys = Object.keys(S.years).map(Number); const n = String(ys.length ? Math.max(...ys) + 1 : today().getFullYear()); ensureYear(n); selYear = n; commit(); }
+      if (d.y === '+') return addYearSheet();
       else { selYear = d.y; if (desk.matches) detail = {y: d.y, i: detail && detail.y === d.y ? detail.i : 0}; render(); }
       return;
     case 'year-del': return confirmDeleteYear(d.y);
@@ -1106,6 +1130,7 @@ document.addEventListener('click', e => {
     case 'imp-go': return importRows();
     case 'imp-flip': if (imp) { imp.rows.forEach(r => { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; r.dup = isDup(r); }); renderReview(); } return;
     case 'imp-all': return importApply('all');
+    case 'year-add': return addYear(d.y);
     case 'acct': return acctForm(j);
     case 'bill-pay': { const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta'); return; }
     case 'bill-edit': return billForm(+j);
