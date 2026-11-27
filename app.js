@@ -258,7 +258,8 @@ function renderBills() {
   // your own bills first, then the common ones
   const used = [...new Set((S.meta.bills || []).slice().reverse().map(x => x.name))];
   const names = [...used, ...PRESETS.filter(p => !used.some(u => u.toLowerCase() === p.toLowerCase()))];
-  $('qbChips').innerHTML = names.map((n, k) => `<button type="button" class="chip${k < used.length ? ' mine' : ''}" data-act="qb-name" data-n="${esc(n)}">${esc(n)}</button>`).join('');
+  $('qbChips').innerHTML = names.map((n, k) => `<button type="button" class="chip" data-act="qb-name" data-n="${esc(n)}" aria-pressed="false">${k < used.length ? '<i class="mine" aria-hidden="true"></i>' : ''}${esc(n)}</button>`).join('');
+  markChip();
 }
 
 
@@ -348,7 +349,18 @@ function pickedBill() {
   const dates = isNaN(y) ? [] : Array.from({length: n}, (_, k) => iso(mkDate(y, m + k, day)));
   return {name: nm, a: parseAmt($('pkAmt').value || 'x'), dates};
 }
+function markChip() {
+  const typed = $('qb').value.trim().toLowerCase();
+  let hit = null;
+  $('qbChips').querySelectorAll('.chip').forEach(c => {
+    const n = c.dataset.n.toLowerCase(), on = !!typed && (typed === n || typed.startsWith(n + ' ')) && (!hit || n.length > hit.dataset.n.length);
+    if (on) { if (hit) hit.setAttribute('aria-pressed', 'false'); hit = c; }
+    c.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  if (hit && hit.scrollIntoView && !matchMedia('(hover:hover) and (pointer:fine)').matches) hit.scrollIntoView({block: 'nearest', inline: 'nearest', behavior: 'smooth'});
+}
 function quickPreview() {
+  if (qbMode === 'type') markChip();
   const out = $('qbPrev'), go = $('qbGo');
   if (qbMode === 'type' && !$('qb').value.trim()) { out.innerHTML = '<span class="muted">Try “SPayLater 10,794 Jan 5” or “Lazada 12,252.53 every 16th x3”.</span>'; go.disabled = true; return null; }
   const p = qbMode === 'type' ? parseBill($('qb').value.trim()) : pickedBill(), miss = [];
