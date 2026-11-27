@@ -196,3 +196,5 @@ textarea{width:100%;font:15px/1.4 Inter,system-ui,sans-serif;color:var(--ink);ba
 .eye svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .eye[aria-pressed=true]{color:var(--blue)}
 .big.masked{letter-spacing:.04em}
+.totbtn{text-align:left;font-family:Literata,Georgia,serif;font-weight:600;line-height:1.05;min-height:0;border-radius:8px;cursor:pointer;-webkit-user-select:none;user-select:none}
+.totbtn:active{opacity:.7}
