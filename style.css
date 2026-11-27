@@ -63,7 +63,7 @@ input.bad{border-color:var(--red)}
 .auth{max-width:420px;margin:12vh auto 0;padding:0 22px}
 .auth .logo{width:64px;height:64px;border-radius:16px;margin-bottom:18px}
 .err{color:var(--red);font-size:14px;min-height:21px;margin-top:8px}
-.filebtn{position:relative;overflow:hidden;display:grid;place-items:center}.filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.filebtn{border-radius:12px;min-height:50px;cursor:pointer;position:relative;overflow:hidden;display:grid;place-items:center}.filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
 @media(prefers-reduced-motion:reduce){.sheet,.scrim,.toast{transition:none!important}}
 
 /* ===== shared ===== */

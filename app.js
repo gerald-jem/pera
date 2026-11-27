@@ -23,7 +23,7 @@ const store = {
 const today = () => new Date();
 // a bill is repaid from the month BEFORE its due date (due Jan 5, 2027 → December 2026)
 const billMonth = due => { const d = new Date(due + 'T00:00:00'); d.setDate(1); d.setMonth(d.getMonth() - 1); return {y: String(d.getFullYear()), i: d.getMonth()}; };
-const billsIn = (y, i) => (S.meta.bills || []).map((b, j) => ({...b, j})).filter(b => b.count === true && b.due && (m => m.y === y && m.i === i)(billMonth(b.due)));
+const billsIn = (y, i) => (S.meta.bills || []).map((b, j) => ({...b, j})).filter(b => b.count !== false && b.due && (m => m.y === y && m.i === i)(billMonth(b.due)));
 
 /* ================= state ================= */
 const cfg = window.PERA_CONFIG || {};
@@ -40,7 +40,8 @@ let selYear = String(today().getFullYear());
 let detail = null;        // {y,i} month shown in the desktop side panel
 const desk = matchMedia('(min-width:900px)');
 
-function blank() { return {meta: {years: [], bills: [], accounts: [], maya: null, phone: null}, years: {}}; }
+function blank() { return {meta: {years: [], bills: [], accounts: [], maya: null, phone: null, trash: []}, years: {}}; }
+const TRASH_DAYS = 30;
 const kData = () => 'pera:data:' + user.id;
 const kDirty = () => 'pera:dirty:' + user.id;
 function saveLocal() { store.set(kData(), S); store.set(kDirty(), [...dirty]); }
@@ -208,7 +209,9 @@ function renderMonths(ser) {
     <span class="t"><b>${M[p.i]}</b><small><span class="up">+${esc(pesoS(p.inc))}</span> · <span class="dn">−${esc(pesoS(p.exp))}</span> · saved ${esc(pesoS(p.sav))}</small></span>
     <span class="mr">${p.past ? 'Total' : 'Planned'}<b>${esc(peso(p.total))}</b></span></button></li>`).join('')
     || '<li class="empty">No months yet. Tap ＋ Year.</li>';
-  $('yearActions').innerHTML = rows.length ? `<button class="danger" data-act="year-del" data-y="${esc(selYear)}">Delete ${esc(selYear)}</button>` : '';
+  const binN = (S.meta.trash || []).length;
+  $('yearActions').innerHTML = (rows.length ? `<button class="danger" data-act="year-del" data-y="${esc(selYear)}">Delete ${esc(selYear)}</button>` : '')
+    + (binN ? `<button class="plain" data-act="settings">Recycle bin (${binN})</button>` : '');
   $('yearFoot').textContent = rows.length ? `${selYear}: income ${peso(rows.reduce((a, p) => a + p.inc, 0))}, spent ${peso(rows.reduce((a, p) => a + p.exp, 0))}, saved ${peso(rows.reduce((a, p) => a + p.sav, 0))}.` : '';
 }
 
@@ -244,7 +247,7 @@ function renderBills() {
   $('billList').innerHTML = b.map(x => {
     const late = !x.paid && Date.parse(x.due + 'T00:00:00') < now.getTime();
     return `<li><button class="chk ${x.paid ? 'on' : ''}" data-act="bill-pay" data-j="${x.j}" aria-label="${x.paid ? 'Mark unpaid' : 'Mark paid'}: ${esc(x.name)}"><span>${x.paid ? '✓' : ''}</span></button>
-      <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(x.name)}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid · ' : late ? 'Past due · ' : 'Due '}${esc(fmtDate(x.due))}${x.count === true ? ` · expense in ${M[billMonth(x.due).i].slice(0, 3)} ${billMonth(x.due).y}` : ''}</small></span>
+      <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(x.name)}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid · ' : late ? 'Past due · ' : 'Due '}${esc(fmtDate(x.due))}${x.count !== false ? ` · expense in ${M[billMonth(x.due).i].slice(0, 3)} ${billMonth(x.due).y}` : ''}</small></span>
       <span class="amt" style="${x.paid ? 'opacity:.5;text-decoration:line-through' : ''}">${esc(peso(+x.a, 2))}</span></button>
       <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete ${esc(x.name)}">×</button></li>`;
   }).join('') || '<li class="empty">No bills yet. Type one above.</li>';
@@ -473,7 +476,7 @@ function billForm(j) {
     <form id="bf" novalidate><label for="bn">Name</label><input id="bn" maxlength="40" placeholder="SPayLater" value="${esc(b.name)}">
     <label for="ba">Amount</label><input id="ba" class="amtin" inputmode="decimal" value="${esc(b.a)}">
     <label for="bd">Due date</label><input id="bd" type="date" value="${esc(b.due)}">
-    <label class="check"><input type="checkbox" id="bc" ${b.count === true ? 'checked' : ''}><span id="bcl">${esc(countLabel(b.due))}</span></label>
+    <label class="check"><input type="checkbox" id="bc" ${b.count !== false ? 'checked' : ''}><span id="bcl">${esc(countLabel(b.due))}</span></label>
     <button class="go" type="submit">${j == null ? 'Add' : 'Save'}</button>
     ${j == null ? '' : '<button type="button" class="danger" id="bdel">Delete bill</button>'}</form>`, () => {
     $('bd').addEventListener('input', () => { $('bcl').textContent = countLabel($('bd').value); });
@@ -495,8 +498,8 @@ function billForm(j) {
 function confirmDeleteYear(y) {
   const ms = S.years[y] || [], n = ms.reduce((t, m) => t + m.inc.length + m.exp.length, 0);
   openSheet(`<div class="sheethead"><h2>Delete ${esc(y)}?</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
-    <p>This removes all 12 months of ${esc(y)}: ${n} income and expense entries plus the savings amounts, on every device.</p>
-    <p class="muted">Total money for later years will be recalculated without it. You can undo right after, or restore it from a backup.</p>
+    <p>This removes all 12 months of ${esc(y)} (${n} income and expense entries plus savings amounts) from every device.</p>
+    <p class="muted">It goes to the recycle bin in Settings for ${TRASH_DAYS} days, so you can restore it. Total money for later years is recalculated without it meanwhile.</p>
     <button class="go" style="background:var(--red)" data-act="year-del-yes" data-y="${esc(y)}">Delete ${esc(y)}</button>`);
 }
 function deleteYear(y) {
@@ -504,9 +507,10 @@ function deleteYear(y) {
   closeSheet();
   delete S.years[y];
   S.meta.years = Object.keys(S.years).sort();
+  S.meta.trash = [{y, months, at: new Date().toISOString()}, ...(S.meta.trash || []).filter(t => t.y !== y)];
   if (detail && detail.y === y) detail = null;
   commit('meta', 'y' + y);
-  toast(`${y} deleted`, () => { S.years[y] = months; S.meta.years = Object.keys(S.years).sort(); commit('meta', 'y' + y); });
+  toast(`${y} moved to the recycle bin`, () => restoreYear(y, true));
 }
 function removeBill(j) {
   const [x] = S.meta.bills.splice(j, 1); commit('meta');
@@ -542,27 +546,82 @@ function settings() {
     <p class="muted">Signed in as <b style="color:var(--ink)">${esc(user && user.email)}</b></p>
     <div class="note">${syncState === 'idle' ? 'Everything is synced.' : `${n} change${n === 1 ? '' : 's'} saved on this phone, waiting to upload.`}</div>
     <button class="go" data-act="sync-now">Sync now</button>
+    <h2>Recycle bin</h2>
+    ${binHTML()}
     <h2>Backup</h2>
-    <label class="go filebtn" style="color:var(--on-blue);margin:0">Import backup (.json)<input type="file" id="importFile" accept=".json,application/json"></label>
+    <label class="go filebtn" style="color:var(--on-blue);margin:0">Import or restore from backup (.json)<input type="file" id="importFile" accept=".json,application/json"></label>
     <button class="plain" data-act="export">Export backup</button>
     <h2>Install on your phone</h2>
     <p class="muted"><b>iPhone:</b> in Safari tap Share → Add to Home Screen.<br><b>Android:</b> in Chrome tap ⋮ → Install app (or Add to Home screen).</p>
     <button class="danger" data-act="signout">Sign out</button>`, () => {
     $('importFile').addEventListener('change', async e => {
       const f = e.target.files[0]; if (!f) return;
-      try { importData(JSON.parse(await f.text())); closeSheet(); }
+      try { importData(JSON.parse(await f.text())); }
       catch (err) { toast('That file isn’t a Pera backup'); }
     });
   });
 }
+let pendingImport = null;
 function importData(d) {
   if (!d || typeof d !== 'object' || !d.meta || !d.years) throw new Error('bad');
   for (const [y, ms] of Object.entries(d.years)) if (!/^\d{4}$/.test(y) || !Array.isArray(ms) || ms.length !== 12 || !ms.every(m => Array.isArray(m.inc) && Array.isArray(m.exp))) throw new Error('bad');
+  pendingImport = d;
+  if (!Object.keys(S.years).length) return importApply('all');
+  const missing = Object.keys(d.years).filter(y => !S.years[y]).sort();
+  openSheet(`<div class="sheethead"><h2>Import backup</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    <p class="muted">The file has ${esc(Object.keys(d.years).sort().join(', '))}. You have ${esc(Object.keys(S.years).sort().join(', '))}.</p>
+    ${missing.length ? `<button class="go" data-act="imp-missing">Add missing years only: ${esc(missing.join(', '))}</button><p class="muted">Keeps everything you have now, including bills and edits.</p>` : '<p class="note">You already have every year in this file.</p>'}
+    <button class="danger" data-act="imp-all">Replace everything with this file</button>`);
+}
+function importApply(mode) {
+  const d = pendingImport; if (!d) return; pendingImport = null; closeSheet();
   const before = JSON.parse(JSON.stringify(S));
+  if (mode === 'missing') {
+    const add = Object.keys(d.years).filter(y => !S.years[y]);
+    add.forEach(y => { S.years[y] = d.years[y]; });
+    S.meta.trash = (S.meta.trash || []).filter(t => !add.includes(t.y));
+    S.meta.years = Object.keys(S.years).sort();
+    commit('meta', ...add.map(y => 'y' + y));
+    toast(`Restored ${add.join(', ')}`, () => { add.forEach(y => delete S.years[y]); S.meta = before.meta; commit('meta', ...add.map(y => 'y' + y)); });
+    return;
+  }
+  const gone = Object.keys(S.years).filter(y => !d.years[y]);
   S = {meta: Object.assign(blank().meta, d.meta), years: d.years};
   S.meta.years = Object.keys(S.years).sort();
-  commit('meta', ...S.meta.years.map(y => 'y' + y));
-  toast(`Imported ${S.meta.years.join(', ')}`, () => { S = before; commit('meta', ...Object.keys(S.years).map(y => 'y' + y)); });
+  commit('meta', ...S.meta.years.map(y => 'y' + y), ...gone.map(y => 'y' + y));
+  toast(`Imported ${S.meta.years.join(', ')}`, () => { S = before; commit('meta', ...Object.keys(S.years).map(y => 'y' + y), ...Object.keys(d.years).map(y => 'y' + y)); });
+}
+/* ---------- recycle bin for deleted years ---------- */
+function purgeTrash() {
+  const cut = Date.now() - TRASH_DAYS * 864e5, t = S.meta.trash || [];
+  const keep = t.filter(x => Date.parse(x.at) > cut);
+  if (keep.length !== t.length) { S.meta.trash = keep; dirty.add('meta'); saveLocal(); }
+}
+function binHTML() {
+  const t = S.meta.trash || [];
+  if (!t.length) return '<p class="muted">Empty. Deleted years stay here for ' + TRASH_DAYS + ' days.</p>';
+  return '<ul class="list">' + t.map(x => {
+    const n = x.months.reduce((a, m) => a + m.inc.length + m.exp.length, 0);
+    const left = Math.max(0, Math.ceil((Date.parse(x.at) + TRASH_DAYS * 864e5 - Date.now()) / 864e5));
+    return `<li><span class="rowbtn" style="cursor:default"><span class="dot s">${esc(x.y.slice(2))}</span><span class="t">${esc(x.y)}<small>${n} entries · deleted ${esc(fmtDate(x.at.slice(0, 10)))} · ${left} day${left === 1 ? '' : 's'} left</small></span></span>
+      <button class="ghost" data-act="bin-restore" data-y="${esc(x.y)}">Restore</button><button class="x" data-act="bin-forever" data-y="${esc(x.y)}" aria-label="Delete ${esc(x.y)} forever">×</button></li>`;
+  }).join('') + '</ul>';
+}
+function restoreYear(y, quiet) {
+  const it = (S.meta.trash || []).find(t => t.y === y); if (!it) return;
+  if (S.years[y]) { toast(`${y} already exists. Delete it first to restore the old one.`); return; }
+  S.years[y] = it.months;
+  S.meta.trash = S.meta.trash.filter(t => t !== it);
+  S.meta.years = Object.keys(S.years).sort();
+  if (sheetOpen) closeSheet();
+  commit('meta', 'y' + y);
+  if (!quiet) toast(`${y} restored`);
+}
+function forgetYear(y) {
+  const t = S.meta.trash || [], k = t.findIndex(x => x.y === y); if (k < 0) return;
+  const [it] = t.splice(k, 1); commit('meta');
+  settings();
+  toast(`${y} deleted forever`, () => { S.meta.trash.splice(k, 0, it); commit('meta'); settings(); });
 }
 function exportData() {
   const blob = new Blob([JSON.stringify(S, null, 1)], {type: 'application/json'});
@@ -599,6 +658,10 @@ document.addEventListener('click', e => {
       return;
     case 'year-del': return confirmDeleteYear(d.y);
     case 'year-del-yes': return deleteYear(d.y);
+    case 'bin-restore': return restoreYear(d.y);
+    case 'bin-forever': return forgetYear(d.y);
+    case 'imp-missing': return importApply('missing');
+    case 'imp-all': return importApply('all');
     case 'acct': return acctForm(j);
     case 'bill-pay': { const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta'); return; }
     case 'bill-edit': return billForm(+j);
@@ -660,7 +723,7 @@ $('authForm').addEventListener('submit', async e => {
 
 async function start(u) {
   if (user && user.id === u.id) return;
-  user = u; loadLocal(); showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
+  user = u; loadLocal(); purgeTrash(); showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
   await push(); await pull();
 }
 function stop(msg) { $('toast').classList.remove('on'); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
