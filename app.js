@@ -81,6 +81,7 @@ async function pull() {
   }
   S.meta.years = Object.keys(S.years).sort();
   if (migrateSavings()) dirty.add('meta');
+  if (unifyBillNames()) dirty.add('meta');
   saveLocal(); render();
 }
 async function push() {
@@ -139,7 +140,7 @@ function series() {
 /* ================= render ================= */
 function render() {
   const ser = series();
-  renderHome(ser); renderMonths(ser); renderSavings(); renderBills();
+  renderHome(ser); renderInsights(ser); renderMonths(ser); renderSavings(); renderBills();
   if (desk.matches) renderDetail(ser);
   else if (sheetOpen && sheetMonth && S.years[sheetMonth.y]) $('sheetBody').innerHTML = monthHTML(sheetMonth.y, sheetMonth.i, ser);
   if (sheetOpen && sheetPot) potSheet(sheetPot.id, sheetPot.k);
@@ -249,8 +250,8 @@ function renderBills() {
   }).join('') || '<li class="empty">No bills yet. Type one above.</li>';
   fillPicker();
   // your own bills first, then the common ones
-  const used = [...new Set((S.meta.bills || []).slice().reverse().map(x => x.name))];
-  const names = [...used, ...PRESETS.filter(p => !used.some(u => u.toLowerCase() === p.toLowerCase()))];
+  const used = uniqNames((S.meta.bills || []).slice().reverse().map(x => x.name));
+  const names = [...used, ...PRESETS.filter(p => !used.some(u => sameName(u, p)))];
   $('qbChips').innerHTML = names.map(n => `<button type="button" class="chip" data-act="qb-name" data-n="${esc(n)}" aria-pressed="false">${esc(n)}</button>`).join('');
   markChip();
 }
@@ -288,6 +289,22 @@ function parseBill(text) {
   const known = (S.meta.bills || []).map(x => x.name).find(x => x.toLowerCase() === name.toLowerCase());
   return {name: known || (name ? name[0].toUpperCase() + name.slice(1) : ''), a, dates};
 }
+// bill names are the same bill whatever the capitals ("SPaylater" = "SPayLater")
+const uniqNames = list => { const seen = new Set(); return list.filter(n => { const k = String(n).trim().toLowerCase(); if (!k || seen.has(k)) return false; seen.add(k); return true; }); };
+const sameName = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+// one spelling per bill: the common list's spelling if it matches, otherwise the most used one
+function unifyBillNames() {
+  const bills = S.meta.bills || [], groups = {};
+  bills.forEach(b => { const k = b.name.trim().toLowerCase(); (groups[k] = groups[k] || []).push(b); });
+  let changed = false;
+  for (const g of Object.values(groups)) {
+    const preset = PRESETS.find(p => sameName(p, g[0].name));
+    const counts = {}; g.forEach(b => { counts[b.name] = (counts[b.name] || 0) + 1; });
+    const best = preset || Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+    g.forEach(b => { if (b.name !== best) { b.name = best; changed = true; } });
+  }
+  return changed;
+}
 const PRESETS = ['SPayLater', 'Maya Black', 'Lazada PayLater', 'GGives', 'Atome', 'Home Credit', 'BillEase', 'Credit card', 'Meralco', 'Internet', 'Rent'];
 const NOPTS = [1, 2, 3, 4, 5, 6, 9, 12, 18, 24];
 let qbMode = store.get('pera:qbmode') === 'type' ? 'type' : 'pick', pickSig = '';
@@ -298,8 +315,8 @@ function setQbMode(m) {
   quickPreview();
 }
 function fillPicker() {
-  const used = [...new Set((S.meta.bills || []).slice().reverse().map(x => x.name))];
-  const names = [...used, ...PRESETS.filter(p => !used.some(u => u.toLowerCase() === p.toLowerCase()))];
+  const used = uniqNames((S.meta.bills || []).slice().reverse().map(x => x.name));
+  const names = [...used, ...PRESETS.filter(p => !used.some(u => sameName(u, p)))];
   const sig = names.join('|');
   if (sig === pickSig) return;
   const keep = $('pkName').value;
@@ -322,7 +339,7 @@ function onPickName() {
   const v = $('pkName').value;
   $('pkOther').hidden = v !== '__other';
   if (v === '__other') { $('pkOther').focus(); quickPreview(); return; }
-  const past = (S.meta.bills || []).filter(x => x.name === v).sort((p, q) => p.due.localeCompare(q.due));
+  const past = (S.meta.bills || []).filter(x => sameName(x.name, v)).sort((p, q) => p.due.localeCompare(q.due));
   if (past.length) {
     const last = past[past.length - 1], d = new Date(last.due + 'T00:00:00'), t = today();
     $('pkAmt').value = last.a;
@@ -337,7 +354,8 @@ function onPickName() {
   if (!$('pkAmt').value) $('pkAmt').focus();
 }
 function pickedBill() {
-  const nm = $('pkName').value === '__other' ? $('pkOther').value.trim() : $('pkName').value;
+  let nm = $('pkName').value === '__other' ? $('pkOther').value.trim() : $('pkName').value;
+  nm = ((S.meta.bills || []).find(x => sameName(x.name, nm)) || {name: nm}).name;
   const [y, m] = $('pkMon').value.split('-').map(Number), day = +$('pkDay').value, n = +$('pkN').value;
   const dates = isNaN(y) ? [] : Array.from({length: n}, (_, k) => iso(mkDate(y, m + k, day)));
   return {name: nm, a: parseAmt($('pkAmt').value || 'x'), dates};
@@ -777,6 +795,108 @@ function tdForecastHTML(p, fedit, frate) {
       <div class="two" style="margin-top:8px"><button type="button" class="plain" data-act="${c.own ? 'fc-rate-reset' : 'fc-rate-cancel'}" data-i="${i}" style="margin:0">${c.own ? 'Use plan rate' : 'Cancel'}</button><button class="go" type="submit" style="margin:0">Save</button></div></form></li>` : `<li><button class="rowbtn depbtn" data-act="fc-rate" data-p="${esc(p.id)}" data-i="${i}"><span class="t">${esc(fmtDate(c.start, {month: 'short', year: 'numeric'}))} – ${esc(fmtDate(c.end, {month: 'short', year: 'numeric'}))}<small>${pct(c.rate)}${c.own ? ' (own rate)' : ''} · +${esc(peso(c.put))} put in · +${esc(peso(c.interest, 2))} interest</small></span><span class="amtcol"><b class="amt">${esc(peso(c.closing, 2))}</b><small>at maturity</small></span></button></li>`).join('')}</ul>`;
 }
 
+/* ================= insights (on Home) ================= */
+// Categories come from each entry's description; entries without one (old spreadsheet rows) show as "No description".
+const CATS = [
+  ['Travel', /agoda|booking\.com|airasia|cebu ?pacific|philippine airlines|\bpal\b|klook|airbnb|hotel|lazada travel|traveloka|trip\.com/],
+  ['Food & drinks', /jollibee|mcdo|mcdonald|food ?panda|fp\*|grab ?food|starbucks|kfc|chowking|mang inasal|greenwich|restaurant|resto|cafe|coffee|bakery|pizza|samgyup|milk ?tea|dunkin|krispy|shakey|max'?s|burger|bbq|lugaw|food/],
+  ['Groceries', /supermarket|puregold|savemore|robinsons (super|easy)|grocery|waltermart|walter mart|landers|s&r|alfamart|7-?eleven|ministop|uncle john|mart\b/],
+  ['Bills & PayLater', /spaylater|paylater|ggives|atome|home ?credit|billease|credit card|maya black|card payment|loan|amortization/],
+  ['Utilities & load', /meralco|maynilad|manila water|pldt|globe|smart|converge|sky ?cable|dito|internet|wifi|postpaid|\bload\b|electric|water bill/],
+  ['Subscriptions & games', /netflix|spotify|youtube|steam|playstation|psn|xbox|nintendo|apple\.com|itunes|google|disney|viu|hbo|chatgpt|openai|claude|anthropic|canva|icloud|prime video|game/],
+  ['Transport', /\bgrab\b|angkas|joyride|move ?it|\blrt|\bmrt|beep|petron|shell|caltex|seaoil|cleanfuel|\bgas\b|toll|autosweep|easytrip|parking|taxi|bus\b|jeep/],
+  ['Shopping', /shopee|lazada|zalora|uniqlo|\bh&m|sm store|\bmall\b|amazon|temu|shein|tiktok shop|decathlon|ikea|ace hardware|national book/],
+  ['Health', /mercury drug|watsons|pharmacy|botika|hospital|clinic|dental|medical|lab test|doctor/],
+  ['Cash withdrawals', /\batm\b|withdraw/],
+  ['Transfers', /sent to|transfer to|instapay|pesonet|send money|sent money|fund transfer/],
+];
+const catOf = n => { if (!n) return 'No description'; const s = n.toLowerCase(); const c = CATS.find(([, re]) => re.test(s)); return c ? c[0] : 'Other'; };
+const BRANDS = [['Shopee', /shopee/], ['Lazada Travel', /lazada travel/], ['Lazada', /lazada/], ['Food Panda', /food ?panda|fp\*/], ['Grab', /\bgrab/], ['Steam', /steam/], ['GCash', /gcash/],
+  ['Netflix', /netflix/], ['Spotify', /spotify/], ['YouTube', /youtube/], ['Apple', /apple\.com|itunes/], ['Google', /google/], ['Jollibee', /jollibee/], ['McDonald’s', /mcdo|mcdonald/],
+  ['Starbucks', /starbucks/], ['Meralco', /meralco/], ['Mercury Drug', /mercury drug/], ['Watsons', /watsons/], ['7-Eleven', /7-?eleven/], ['Puregold', /puregold/], ['SM Supermarket', /sm supermarket/], ['Angkas', /angkas/], ['Agoda', /agoda/]];
+const merchantOf = (n, bill) => {
+  if (!n) return null;
+  if (bill) return n;                        // bills already have a clean name
+  const lo = n.toLowerCase(), br = BRANDS.find(([, re]) => re.test(lo)); if (br) return br[0];
+  let s = n.toLowerCase().replace(/^(visa|visae|mc|mastercard|pos purchase|pos|purchase|online purchase|payment to|payment)[-\s:*]*/i, '').replace(/^(wl|fp|sp)\s*\*/i, '');
+  s = s.split(/[\s*_/]+/).filter(w => w && !/\d/.test(w) && !/^(ph|us|sg|hk|city|inc|corp|com|the|of|and|to|from)$/.test(w)).slice(0, 2).join(' ');
+  if (!s) return null;
+  return s.replace(/\b\w/g, c => c.toUpperCase()).replace(/\.Com\b/i, '.com');
+};
+let insP = store.get('pera:insP') || '3m', insYear = null;
+function periodMonths(kind) {
+  const t = today(), out = [];
+  if (kind === 'month') out.push({y: String(t.getFullYear()), i: t.getMonth()});
+  else if (kind === '3m') for (let k = 2; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); out.push({y: String(d.getFullYear()), i: d.getMonth()}); }
+  else { const y = kind === 'year' ? t.getFullYear() : t.getFullYear() - 1, last = kind === 'year' ? t.getMonth() : 11; for (let i = 0; i <= last; i++) out.push({y: String(y), i}); }
+  return out.filter(m => S.years[m.y]);
+}
+function spendingIn(months) {
+  const rows = [];
+  for (const {y, i} of months) {
+    const m = S.years[y][i];
+    m.exp.forEach(x => rows.push({n: x.n || '', a: +x.a, y, i}));
+    billsIn(y, i).forEach(b => rows.push({n: b.name, a: +b.a, y, i, bill: true}));
+  }
+  return rows;
+}
+function renderInsights(ser) {
+  const box = $('insights'); if (!box) return;
+  if (!Object.keys(S.years).length) { box.innerHTML = ''; return; }
+  const months = periodMonths(insP), rows = spendingIn(months), total = rows.reduce((s, r) => s + r.a, 0);
+  const pLabel = {month: 'this month', '3m': 'the last 3 months', year: 'this year', lastyear: 'last year'}[insP];
+  // 1 — where the money goes
+  const byCat = {}; rows.forEach(r => { const c = catOf(r.n); byCat[c] = (byCat[c] || 0) + r.a; });
+  const cats = Object.entries(byCat).filter(([, v]) => v > 0.004).sort((a, b) => b[1] - a[1]);
+  const maxC = Math.max(1, ...cats.map(c => c[1]));
+  const noDesc = byCat['No description'] || 0;
+  // 2 — month vs month (last 6 months up to now)
+  const t = today(), last6 = [];
+  for (let k = 5; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); const p = ser.find(q => +q.y === d.getFullYear() && q.i === d.getMonth()); if (p) last6.push(p); }
+  const maxM = Math.max(1, ...last6.flatMap(p => [p.inc, p.exp]));
+  const avgExp = last6.length ? last6.reduce((s, p) => s + p.exp, 0) / last6.length : 0;
+  // 3 — top merchants
+  const byM = {}; rows.forEach(r => { const m = merchantOf(r.n, r.bill); if (!m || catOf(r.n) === 'Transfers') return; (byM[m] = byM[m] || {n: m, a: 0, c: 0}); byM[m].a += r.a; byM[m].c++; });
+  const merch = Object.values(byM).filter(m => m.a > 0).sort((a, b) => b.a - a.a).slice(0, 8);
+  // 4 — year in review
+  const ys = Object.keys(S.years).sort(); if (!insYear || !S.years[insYear]) insYear = ys.includes(String(t.getFullYear())) ? String(t.getFullYear()) : ys[ys.length - 1];
+  const yr = ser.filter(p => p.y === insYear && p.past), yInc = yr.reduce((s, p) => s + p.inc, 0), yExp = yr.reduce((s, p) => s + p.exp, 0), ySav = yr.reduce((s, p) => s + p.sav, 0);
+  const yEnd = +insYear === t.getFullYear() ? todayIso() : `${insYear}-12-31`, yStart = `${+insYear - 1}-12-31`;
+  const potGrow = pots().reduce((s, p) => s + potValueAt(p, yEnd) - potValueAt(p, yStart), 0);
+  const big = [...yr].sort((a, b) => b.exp - a.exp)[0], best = [...yr].sort((a, b) => (b.inc - b.exp) - (a.inc - a.exp))[0];
+  const yRows = spendingIn(yr.map(p => ({y: p.y, i: p.i})));
+  const yCat = {}; yRows.forEach(r => { const c = catOf(r.n); if (c !== 'No description') yCat[c] = (yCat[c] || 0) + r.a; });
+  const topCat = Object.entries(yCat).sort((a, b) => b[1] - a[1])[0];
+  const yM = {}; yRows.forEach(r => { const m = merchantOf(r.n, r.bill); if (m && catOf(r.n) !== 'Transfers') yM[m] = (yM[m] || 0) + r.a; });
+  const topM = Object.entries(yM).sort((a, b) => b[1] - a[1])[0];
+  const rate = (inc, exp) => inc > 0 ? Math.round((inc - exp) / inc * 100) : null;
+
+  box.innerHTML = `<div class="inshead"><h2>Insights</h2><div class="seg insseg">${[['month', 'This month'], ['3m', '3 months'], ['year', 'This year'], ['lastyear', 'Last year']].map(([k, l]) => `<button data-act="ins-p" data-k="${k}" aria-pressed="${k === insP}">${l}</button>`).join('')}</div></div>
+  <div class="insgrid">
+    <section class="card inscard"><h3>Where your money goes</h3><p class="muted">${esc(peso(total))} spent in ${pLabel}</p>
+      ${cats.length ? `<div class="catrows">${cats.map(([c, v]) => `<div class="cr"><span>${esc(c)}</span><i><b style="width:${(v / maxC * 100).toFixed(1)}%"></b></i><span>${esc(pesoS(v))}<small>${total ? Math.round(v / total * 100) : 0}%</small></span></div>`).join('')}</div>` : '<p class="empty">No spending in this period.</p>'}
+      ${noDesc > 0 ? `<p class="muted">“No description” is spending without a note, mostly from your spreadsheet. Imported statements and new entries are sorted automatically.</p>` : ''}</section>
+    <section class="card inscard"><h3>Month vs month</h3><p class="muted">Average spending ${esc(peso(avgExp))} a month</p>
+      <div class="mvm">${last6.map((p, k) => { const prev = last6[k - 1], ch = prev && prev.exp ? Math.round((p.exp - prev.exp) / prev.exp * 100) : null, r = rate(p.inc, p.exp);
+        return `<div class="mrow2"><span class="ml">${M[p.i].slice(0, 3)}${p.past ? '' : '<small>plan</small>'}</span><span class="mbars"><i class="bi" style="width:${(p.inc / maxM * 100).toFixed(1)}%"></i><i class="be" style="width:${(p.exp / maxM * 100).toFixed(1)}%"></i></span>
+          <span class="mv"><b class="up">+${esc(pesoS(p.inc))}</b><b class="dn">−${esc(pesoS(p.exp))}</b></span><span class="mr2">${r == null ? '—' : r + '% kept'}${ch == null ? '' : ch === 0 ? '<small>same spending</small>' : `<small class="${ch > 0 ? 'dn' : 'up'}">${ch > 0 ? '▲' : '▼'} ${Math.abs(ch)}% spent</small>`}</span></div>`; }).join('')}</div>
+      <p class="muted"><i class="key bi"></i> income · <i class="key be"></i> spent · “kept” = share of income not spent</p></section>
+    <section class="card inscard"><h3>Top merchants</h3><p class="muted">${pLabel[0].toUpperCase() + pLabel.slice(1)}, transfers left out</p>
+      ${merch.length ? `<ol class="mlist">${merch.map(m => `<li><span>${esc(m.n)}<small>${m.c} time${m.c === 1 ? '' : 's'}</small></span><b>${esc(peso(m.a))}</b></li>`).join('')}</ol>` : '<p class="empty">No merchants yet. They come from descriptions in imported statements and new entries.</p>'}</section>
+    <section class="card inscard"><div class="inshead"><h3>Year in review</h3><div class="seg insseg">${ys.map(y => `<button data-act="ins-y" data-y="${esc(y)}" aria-pressed="${y === insYear}">${esc(y)}</button>`).join('')}</div></div>
+      ${yr.length ? `<div class="yrgrid">
+        <div><span>Earned</span><b class="up">${esc(pesoS(yInc))}</b></div><div><span>Spent</span><b class="dn">${esc(pesoS(yExp))}</b></div>
+        <div><span>Kept</span><b>${esc(pesoS(yInc - yExp))}</b><small>${rate(yInc, yExp) ?? '—'}% of income</small></div><div><span>Saved</span><b>${esc(pesoS(ySav))}</b></div>
+        <div><span>Savings grew</span><b class="up">${potGrow >= 0 ? '+' : '−'}${esc(pesoS(Math.abs(potGrow)))}</b><small>all accounts</small></div><div><span>Avg spent / month</span><b>${esc(pesoS(yExp / yr.length))}</b></div></div>
+        <ul class="yrfacts">
+          ${big ? `<li>Biggest spending month: <b>${M[big.i]}</b> (${esc(peso(big.exp))})</li>` : ''}
+          ${best ? `<li>Best month: <b>${M[best.i]}</b>, kept ${esc(peso(best.inc - best.exp))}</li>` : ''}
+          ${topCat ? `<li>Top category: <b>${esc(topCat[0])}</b> (${esc(peso(topCat[1]))})</li>` : ''}
+          ${topM ? `<li>Top merchant: <b>${esc(topM[0])}</b> (${esc(peso(topM[1]))})</li>` : ''}
+        </ul>${+insYear === t.getFullYear() ? '<p class="muted">So far this year.</p>' : ''}` : '<p class="empty">No months recorded yet for this year.</p>'}</section>
+  </div>`;
+}
+
 /* ================= sheet + toast ================= */
 let sheetOpen = false;
 function openSheet(html, onReady) {
@@ -823,7 +943,7 @@ function entryForm(o) {
   const T = {exp: 'expense', inc: 'income', dep: 'savings deposit', bill: 'bill'};
   // default date: today, or the same day inside the month you're adding to
   const tday = today(), dflt = o.d || (o.y != null ? iso(mkDate(+o.y, o.i, tday.getDate())) : iso(tday));
-  const ps = pots(), billNames = [...new Set([...(S.meta.bills || []).slice().reverse().map(x => x.name), ...PRESETS])];
+  const ps = pots(), billNames = uniqNames([...(S.meta.bills || []).slice().reverse().map(x => x.name), ...PRESETS]);
   const nm = new Date(tday.getFullYear(), tday.getMonth() + 1, 5);
   openSheet(`<div class="sheethead"><h2 id="efTitle">${o.edit ? 'Edit' : 'Add'} ${T[t]}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
     ${o.edit ? '' : `<div class="seg addseg">${[['exp', 'Expense'], ['inc', 'Income'], ['dep', 'Savings'], ['bill', 'Bill']].map(([k, l]) => `<button type="button" data-type="${k}" aria-pressed="${k === t}">${l}</button>`).join('')}</div>`}
@@ -859,7 +979,7 @@ function entryForm(o) {
     $('fdt').addEventListener('input', hint);
     $('fbn').addEventListener('change', () => {
       const v = $('fbn').value; $('fbo').hidden = v !== '__other';
-      const past = (S.meta.bills || []).filter(x => x.name === v).sort((a, b) => a.due.localeCompare(b.due)).pop();
+      const past = (S.meta.bills || []).filter(x => sameName(x.name, v)).sort((a, b) => a.due.localeCompare(b.due)).pop();
       if (past && !$('fa').value) { $('fa').value = past.a; const d = new Date(dnum(past.due)); $('fdt').value = iso(mkDate(d.getFullYear(), d.getMonth() + 1, d.getDate())); hint(); }
     });
     show();
@@ -879,7 +999,8 @@ function entryForm(o) {
         toast(`${peso(a, 2)} added to ${p.name}`, () => { undo(); commit('meta'); }); return;
       }
       if (t === 'bill') {
-        const name = $('fbn').value === '__other' ? $('fbo').value.trim() : $('fbn').value;
+        let name = $('fbn').value === '__other' ? $('fbo').value.trim() : $('fbn').value;
+        name = ((S.meta.bills || []).find(x => sameName(x.name, name)) || {name}).name;
         if (!name) { $('fbo').classList.add('bad'); return; }
         const cnt = +$('fbN').value, d0 = new Date(dnum(dt)), made = [], keys = ['meta'];
         for (let k = 0; k < cnt; k++) { const b = {name, a, due: iso(mkDate(d0.getFullYear(), d0.getMonth() + k, d0.getDate())), paid: false, count: true}; S.meta.bills.push(b); made.push(b); const bm = billMonth(b.due); if (!S.years[bm.y]) { ensureYear(bm.y); keys.push('y' + bm.y); } }
@@ -1545,6 +1666,8 @@ document.addEventListener('click', e => {
   const d = el.dataset, j = d.j;
   switch (d.act) {
     case 'close': return closeSheet();
+    case 'ins-p': insP = d.k; store.set('pera:insP', insP); return renderInsights(series());
+    case 'ins-y': insYear = d.y; return renderInsights(series());
     case 'lock-toggle': { if (lockState) { disableLock(); settings(); } else enableLock().then(() => settings()); return; }
     case 'eye': hideTotal = !hideTotal; store.set('pera:hideTotal', hideTotal); render(); return;
     case 'fab': closeSheet(); return entryForm({});
@@ -1708,7 +1831,7 @@ $('authForm').addEventListener('submit', async e => {
 
 async function start(u) {
   if (user && user.id === u.id) return;
-  user = u; if (lockState) showLock(); loadLocal(); purgeTrash(); purgeCycleTrash(); if (migrateSavings()) { dirty.add('meta'); saveLocal(); } showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
+  user = u; if (lockState) showLock(); loadLocal(); purgeTrash(); purgeCycleTrash(); if (unifyBillNames()) { dirty.add('meta'); saveLocal(); } if (migrateSavings()) { dirty.add('meta'); saveLocal(); } showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
   await push(); await pull();
 }
 function stop(msg) { hideToast(); locked = false; $('lockScreen').hidden = true; document.documentElement.classList.remove('applock'); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
