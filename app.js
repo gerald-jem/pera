@@ -1388,14 +1388,19 @@ const monOpts = sel => M.map((m, i) => `<option value="${i}" ${i == sel ? 'selec
 const title = t => ({inc: 'income', exp: 'expense', sav: 'savings'}[t]);
 
 // your most used notes for one-tap shortcuts (last 4 months, used at least twice)
+// your most used payees for one-tap shortcuts (last 4 months, used at least twice), with clean names
+const INC_NAMES = [['Salary', /inrem|payroll|salary|sahod|sweldo/i], ['Interest', /interest/i], ['Cashback', /cashback|rebate/i], ['Refund', /refund|reversal/i]];
+const niceName = (n, t) => { if (t === 'inc') { const h = INC_NAMES.find(([, re]) => re.test(n)); if (h) return h[0]; } return merchantOf(n) || n; };
 function frequent(t) {
   const cut = iso(new Date(today().getFullYear(), today().getMonth() - 4, 1)), by = {};
   for (const y of Object.keys(S.years)) S.years[y].forEach((m, i) => (m[t] || []).forEach(x => {
     if (!x.n || +x.a <= 0) return; const d = x.d || `${y}-${String(i + 1).padStart(2, '0')}-01`; if (d < cut) return;
-    const k = (merchantOf(x.n) || x.n).toLowerCase(), e = by[k] = by[k] || {n: x.n, a: +x.a, c: x.c, d, cnt: 0};
-    e.cnt++; if (d >= e.d) { e.d = d; e.a = +x.a; e.n = x.n; if (x.c) e.c = x.c; }
+    if (t === 'exp' && (x.c || catOf(x.n)) === 'Transfers') return;        // moving money between your accounts isn't a shortcut
+    const name = niceName(x.n, t), k = name.toLowerCase(), e = by[k] = by[k] || {n: name, amts: [], c: x.c, d, cnt: 0};
+    e.cnt++; e.amts.push(+x.a); if (d >= e.d) { e.d = d; if (x.c) e.c = x.c; }
   }));
-  return Object.values(by).filter(e => e.cnt >= 2).sort((a, b) => b.cnt - a.cnt || (a.d < b.d ? 1 : -1)).slice(0, 6);
+  return Object.values(by).filter(e => e.cnt >= 2).sort((a, b) => b.cnt - a.cnt || (a.d < b.d ? 1 : -1)).slice(0, 8)
+    .map(e => { const s = e.amts.slice().sort((p, q) => p - q); return {...e, a: s[Math.floor((s.length - 1) / 2)]}; });   // usual amount
 }
 // a category picked for a merchant applies to its other payments too
 function rememberCat(n, c) {

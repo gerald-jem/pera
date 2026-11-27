@@ -1,7 +1,7 @@
 // Pera service worker: network first, cache as the offline fallback.
 // Bump VERSION whenever app files change.
-const VERSION = 'pera-v44';
-const SHELL = ['./', 'index.html', 'style.css?v=44', 'app.js?v=44', 'config.js?v=44', 'vendor/supabase.js',
+const VERSION = 'pera-v45';
+const SHELL = ['./', 'index.html', 'style.css?v=45', 'app.js?v=45', 'config.js?v=45', 'vendor/supabase.js',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
