@@ -147,9 +147,7 @@ input.bad{border-color:var(--red)}
 #qbChips::-webkit-scrollbar{display:none}
 #qbChips .chip{flex:none;scroll-snap-align:start}
 #qbChips .chip{display:inline-flex;align-items:center;gap:6px}
-#qbChips .chip .mine{width:6px;height:6px;border-radius:50%;background:var(--blue);flex:none}
 #qbChips .chip[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:var(--on-blue);font-weight:600}
-#qbChips .chip[aria-pressed=true] .mine{background:var(--on-blue)}
 /* mouse and trackpad: wrap instead of a sideways swipe row */
 @media (hover:hover) and (pointer:fine){#qbChips{flex-wrap:wrap;overflow:visible;margin-inline:0;padding-inline:0}#qbChips .chip:hover{border-color:var(--blue)}}
 

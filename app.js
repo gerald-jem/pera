@@ -258,7 +258,7 @@ function renderBills() {
   // your own bills first, then the common ones
   const used = [...new Set((S.meta.bills || []).slice().reverse().map(x => x.name))];
   const names = [...used, ...PRESETS.filter(p => !used.some(u => u.toLowerCase() === p.toLowerCase()))];
-  $('qbChips').innerHTML = names.map((n, k) => `<button type="button" class="chip" data-act="qb-name" data-n="${esc(n)}" aria-pressed="false">${k < used.length ? '<i class="mine" aria-hidden="true"></i>' : ''}${esc(n)}</button>`).join('');
+  $('qbChips').innerHTML = names.map(n => `<button type="button" class="chip" data-act="qb-name" data-n="${esc(n)}" aria-pressed="false">${esc(n)}</button>`).join('');
   markChip();
 }
 
