@@ -138,6 +138,7 @@ function render() {
   const ser = series();
   renderHome(ser); renderMonths(ser); renderSavings(); renderBills();
   if (desk.matches) renderDetail(ser);
+  else if (sheetOpen && sheetMonth && S.years[sheetMonth.y]) $('sheetBody').innerHTML = monthHTML(sheetMonth.y, sheetMonth.i, ser);
 }
 function renderHome(ser) {
   const cur = ser.find(p => p.now) || ser.filter(p => p.past).pop() || ser[0];
@@ -170,10 +171,12 @@ function entryRows(y, i) {
     return `<li><button class="rowbtn" data-act="edit-entry" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}">
       <span class="dot ${inc ? 'i' : 'e'}">${inc ? '↓' : '↑'}</span>
       <span class="t">${esc(x.n || (inc ? 'Income' : 'Expense'))}<small>${inc ? 'Received' : x.a < 0 ? 'Refund / adjustment' : 'Sent'}</small></span>
-      <span class="amt ${inc ? 'up' : ''}">${inc ? '+' : x.a < 0 ? '+' : '−'}${esc(peso(Math.abs(x.a), 2))}</span></button></li>`;
+      <span class="amt ${inc ? 'up' : ''}">${inc ? '+' : x.a < 0 ? '+' : '−'}${esc(peso(Math.abs(x.a), 2))}</span></button>
+      <button class="x" data-act="entry-del" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}" aria-label="Delete ${esc(x.n || (inc ? 'income' : 'expense'))}">×</button></li>`;
   }).join('');
-  h += billsIn(y, i).map(b => `<li><button class="rowbtn" data-act="bill-edit" data-j="${b.j}"><span class="dot e">↑</span><span class="t">${esc(b.name)}<small>Bill due ${esc(fmtDate(b.due))}${b.paid ? ' · paid' : ''}</small></span><span class="amt">−${esc(peso(+b.a, 2))}</span></button></li>`).join('');
-  if (+m.sav) h += `<li><button class="rowbtn" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}"><span class="dot s">₱</span><span class="t">To savings<small>Moved out of total</small></span><span class="amt">${esc(peso(+m.sav, 2))}</span></button></li>`;
+  h += billsIn(y, i).map(b => `<li><button class="rowbtn" data-act="bill-edit" data-j="${b.j}"><span class="dot e">↑</span><span class="t">${esc(b.name)}<small>Bill due ${esc(fmtDate(b.due))}${b.paid ? ' · paid' : ''}</small></span><span class="amt">−${esc(peso(+b.a, 2))}</span></button><span class="x" aria-hidden="true"></span></li>`).join('');
+  if (+m.sav) h += `<li><button class="rowbtn" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}"><span class="dot s">₱</span><span class="t">To savings<small>Moved out of total</small></span><span class="amt">${esc(peso(+m.sav, 2))}</span></button>
+      <button class="x" data-act="sav-del" data-y="${esc(y)}" data-i="${i}" aria-label="Remove savings for ${M[i]}">×</button></li>`;
   return h;
 }
 function drawChart() {
@@ -376,6 +379,7 @@ function quickAdd() {
 /* ================= sheet + toast ================= */
 let sheetOpen = false;
 function openSheet(html, onReady) {
+  sheetMonth = null;
   $('sheetBody').innerHTML = html;
   $('scrim').classList.add('on'); $('sheet').classList.add('on'); document.body.classList.add('locked');
   sheetOpen = true;
@@ -383,7 +387,7 @@ function openSheet(html, onReady) {
 }
 function closeSheet() {
   $('scrim').classList.remove('on'); $('sheet').classList.remove('on'); document.body.classList.remove('locked');
-  sheetOpen = false;
+  sheetOpen = false; sheetMonth = null;
 }
 $('scrim').addEventListener('click', closeSheet);
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetOpen) closeSheet(); });
@@ -456,11 +460,13 @@ function monthHTML(y, i, ser) {
     <div class="trio"><div class="tile"><span>Income</span><b class="up">${esc(peso(p.inc))}</b></div><div class="tile"><span>Spent</span><b class="dn">${esc(peso(p.exp))}</b></div><div class="tile"><span>Saved</span><b>${esc(peso(p.sav))}</b></div></div>
     <p class="muted">Total money at month end: <b style="color:var(--ink)">${esc(peso(p.total, 2))}</b></p>
     <ul class="list">${entryRows(y, i) || '<li class="empty">No entries.</li>'}</ul>
-    <button class="plain" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}">Set savings for ${M[i]}</button>`;
+    <button class="plain" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}">Set savings for ${M[i]}</button>
+    ${(S.years[y][i].inc.length || S.years[y][i].exp.length || +S.years[y][i].sav) ? `<button class="danger" data-act="month-clear" data-y="${esc(y)}" data-i="${i}">Clear ${M[i]}</button>` : ''}`;
 }
+let sheetMonth = null;   // month shown in the phone's bottom sheet
 function monthSheet(y, i) {
   if (desk.matches) { detail = {y, i}; render(); return; }
-  openSheet(monthHTML(y, i));
+  openSheet(monthHTML(y, i)); sheetMonth = {y, i};
 }
 function renderDetail(ser) {
   const ys = Object.keys(S.years);
@@ -653,6 +659,17 @@ document.addEventListener('click', e => {
     case 'edit-entry': { const x = S.years[d.y][+d.i][d.t].find(z => z.id === d.id); if (x) entryForm({t: d.t, y: d.y, i: +d.i, id: d.id, a: x.a, n: x.n, edit: true}); return; }
     case 'edit-sav': return entryForm({t: 'sav', y: d.y, i: +d.i, a: S.years[d.y][+d.i].sav || '', edit: true});
     case 'add-in-month': return entryForm({y: d.y, i: +d.i});
+    case 'entry-del': {
+      const m = S.years[d.y][+d.i], list = m[d.t], k = list.findIndex(z => z.id === d.id); if (k < 0) return;
+      const [x] = list.splice(k, 1); commit('y' + d.y);
+      toast(`${x.n || (d.t === 'inc' ? 'Income' : 'Expense')} deleted`, () => { list.splice(k, 0, x); commit('y' + d.y); }); return;
+    }
+    case 'sav-del': { const m = S.years[d.y][+d.i], old = m.sav; m.sav = 0; commit('y' + d.y); toast(`Savings for ${M[+d.i]} removed`, () => { m.sav = old; commit('y' + d.y); }); return; }
+    case 'month-clear': {
+      const y = d.y, i = +d.i, old = S.years[y][i];
+      S.years[y][i] = {inc: [], exp: [], sav: 0}; commit('y' + y);
+      toast(`${M[i]} ${y} cleared`, () => { S.years[y][i] = old; commit('y' + y); }); return;
+    }
     case 'month': return monthSheet(selYear, +d.i);
     case 'year':
       if (d.y === '+') { const ys = Object.keys(S.years).map(Number); const n = String(ys.length ? Math.max(...ys) + 1 : today().getFullYear()); ensureYear(n); selYear = n; commit(); }
