@@ -21,6 +21,9 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch {} },
 };
 const today = () => new Date();
+// a bill is repaid from the month BEFORE its due date (due Jan 5, 2027 → December 2026)
+const billMonth = due => { const d = new Date(due + 'T00:00:00'); d.setDate(1); d.setMonth(d.getMonth() - 1); return {y: String(d.getFullYear()), i: d.getMonth()}; };
+const billsIn = (y, i) => (S.meta.bills || []).map((b, j) => ({...b, j})).filter(b => b.count === true && b.due && (m => m.y === y && m.i === i)(billMonth(b.due)));
 
 /* ================= state ================= */
 const cfg = window.PERA_CONFIG || {};
@@ -122,7 +125,7 @@ function series() {
   const out = [], now = today(), CY = now.getFullYear(), CM = now.getMonth();
   let run = 0;
   for (const y of Object.keys(S.years).sort()) S.years[y].forEach((m, i) => {
-    const inc = sum(m.inc), exp = sum(m.exp), sav = +m.sav || 0;
+    const inc = sum(m.inc), exp = sum(m.exp) + sum(billsIn(y, i)), sav = +m.sav || 0;
     run = run + inc - sav - exp;
     out.push({y, i, inc, exp, sav, total: run, past: +y < CY || (+y === CY && i <= CM), now: +y === CY && i === CM});
   });
@@ -168,6 +171,7 @@ function entryRows(y, i) {
       <span class="t">${esc(x.n || (inc ? 'Income' : 'Expense'))}<small>${inc ? 'Received' : x.a < 0 ? 'Refund / adjustment' : 'Sent'}</small></span>
       <span class="amt ${inc ? 'up' : ''}">${inc ? '+' : x.a < 0 ? '+' : '−'}${esc(peso(Math.abs(x.a), 2))}</span></button></li>`;
   }).join('');
+  h += billsIn(y, i).map(b => `<li><button class="rowbtn" data-act="bill-edit" data-j="${b.j}"><span class="dot e">↑</span><span class="t">${esc(b.name)}<small>Bill due ${esc(fmtDate(b.due))}${b.paid ? ' · paid' : ''}</small></span><span class="amt">−${esc(peso(+b.a, 2))}</span></button></li>`).join('');
   if (+m.sav) h += `<li><button class="rowbtn" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}"><span class="dot s">₱</span><span class="t">To savings<small>Moved out of total</small></span><span class="amt">${esc(peso(+m.sav, 2))}</span></button></li>`;
   return h;
 }
@@ -240,7 +244,7 @@ function renderBills() {
   $('billList').innerHTML = b.map(x => {
     const late = !x.paid && Date.parse(x.due + 'T00:00:00') < now.getTime();
     return `<li><button class="chk ${x.paid ? 'on' : ''}" data-act="bill-pay" data-j="${x.j}" aria-label="${x.paid ? 'Mark unpaid' : 'Mark paid'}: ${esc(x.name)}"><span>${x.paid ? '✓' : ''}</span></button>
-      <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(x.name)}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid · ' : late ? 'Past due · ' : 'Due '}${esc(fmtDate(x.due))}</small></span>
+      <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(x.name)}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid · ' : late ? 'Past due · ' : 'Due '}${esc(fmtDate(x.due))}${x.count === true ? ` · expense in ${M[billMonth(x.due).i].slice(0, 3)} ${billMonth(x.due).y}` : ''}</small></span>
       <span class="amt" style="${x.paid ? 'opacity:.5;text-decoration:line-through' : ''}">${esc(peso(+x.a, 2))}</span></button>
       <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete ${esc(x.name)}">×</button></li>`;
   }).join('') || '<li class="empty">No bills.</li>';
@@ -345,21 +349,27 @@ function renderDetail(ser) {
 }
 
 function billForm(j) {
-  const b = j == null ? {name: '', a: '', due: '', paid: false} : S.meta.bills[j];
+  const b = j == null ? {name: '', a: '', due: '', paid: false, count: true} : S.meta.bills[j];
+  const countLabel = due => { if (!due) return 'Count as an expense in the month before it’s due'; const m = billMonth(due); return `Count as an expense in ${M[m.i]} ${m.y}`; };
   openSheet(`<div class="sheethead"><h2>${j == null ? 'Add a bill' : 'Edit bill'}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
     <form id="bf" novalidate><label for="bn">Name</label><input id="bn" maxlength="40" placeholder="SPayLater" value="${esc(b.name)}">
     <label for="ba">Amount</label><input id="ba" class="amtin" inputmode="decimal" value="${esc(b.a)}">
     <label for="bd">Due date</label><input id="bd" type="date" value="${esc(b.due)}">
+    <label class="check"><input type="checkbox" id="bc" ${b.count === true ? 'checked' : ''}><span id="bcl">${esc(countLabel(b.due))}</span></label>
     <button class="go" type="submit">${j == null ? 'Add' : 'Save'}</button>
     ${j == null ? '' : '<button type="button" class="danger" id="bdel">Delete bill</button>'}</form>`, () => {
+    $('bd').addEventListener('input', () => { $('bcl').textContent = countLabel($('bd').value); });
     $('bf').addEventListener('submit', e => {
       e.preventDefault();
       const a = parseAmt($('ba').value), d = $('bd').value, n = $('bn').value.trim();
       $('ba').classList.toggle('bad', isNaN(a)); $('bd').classList.toggle('bad', !d); $('bn').classList.toggle('bad', !n);
       if (isNaN(a) || !d || !n) return;
-      const v = {name: n, a, due: d, paid: !!b.paid};
+      const v = {name: n, a, due: d, paid: !!b.paid, count: $('bc').checked};
       if (j == null) S.meta.bills.push(v); else S.meta.bills[j] = v;
-      closeSheet(); commit('meta'); toast(j == null ? 'Bill added' : 'Bill saved');
+      const keys = ['meta'];
+      if (v.count) { const m = billMonth(d); if (!S.years[m.y]) { ensureYear(m.y); keys.push('y' + m.y); } }
+      closeSheet(); commit(...keys);
+      toast(v.count ? `${j == null ? 'Bill added' : 'Bill saved'} · expense in ${M[billMonth(d).i]} ${billMonth(d).y}` : (j == null ? 'Bill added' : 'Bill saved'));
     });
     const del = $('bdel'); if (del) del.addEventListener('click', () => { closeSheet(); removeBill(j); });
   });
