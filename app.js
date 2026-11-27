@@ -393,14 +393,21 @@ $('scrim').addEventListener('click', closeSheet);
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetOpen) closeSheet(); });
 
 let toastTimer;
+// toast(msg, undoFn?, buttonLabel?) — warnings are messages that start with "Couldn" / "Still" / "That" / contain "already"
 function toast(msg, undo, label = 'Undo') {
-  const t = $('toast'), b = $('toastBtn');
+  const t = $('toast'), b = $('toastBtn'), ms = undo ? 6000 : 3500;
+  const warn = /^(Couldn|Still|That|Not)|already|offline/i.test(msg);
   $('toastMsg').textContent = msg;
+  $('toastIc').textContent = warn ? '!' : '✓';
+  t.classList.toggle('warn', warn);
   b.hidden = !undo; b.textContent = label;
-  b.onclick = () => { t.classList.remove('on'); if (undo) undo(); };
-  t.classList.add('on');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), 4000);
+  b.onclick = e => { e.stopPropagation(); hideToast(); if (undo) undo(); };
+  t.style.setProperty('--toast-ms', ms + 'ms');
+  t.classList.remove('on'); void t.offsetWidth; t.classList.add('on');   // restart the countdown bar
+  clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, ms);
 }
+function hideToast() { clearTimeout(toastTimer); $('toast').classList.remove('on'); }
+$('toast').addEventListener('click', hideToast);
 
 /* ================= forms ================= */
 const yearOpts = sel => [...new Set([...Object.keys(S.years), String(today().getFullYear())])].sort().map(y => `<option ${y == sel ? 'selected' : ''}>${esc(y)}</option>`).join('');
@@ -518,7 +525,7 @@ function deleteYear(y) {
   S.meta.trash = [{y, months, at: new Date().toISOString()}, ...(S.meta.trash || []).filter(t => t.y !== y)];
   if (detail && detail.y === y) detail = null;
   commit('meta', 'y' + y);
-  toast(`${y} moved to the recycle bin`, () => restoreYear(y, true));
+  toast(`${y} moved to recycle bin`, () => restoreYear(y, true));
 }
 function removeBill(j) {
   const [x] = S.meta.bills.splice(j, 1); commit('meta');
@@ -745,7 +752,7 @@ async function start(u) {
   user = u; loadLocal(); purgeTrash(); showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
   await push(); await pull();
 }
-function stop(msg) { $('toast').classList.remove('on'); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
+function stop(msg) { hideToast(); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
 
 if (!sb) {
   showAuth('Setup needed: add your Supabase URL and anon key to config.js.');
