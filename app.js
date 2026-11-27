@@ -513,13 +513,12 @@ if (!sb) {
 
 /* ================= offline app shell ================= */
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('sw.js').then(reg => {
-    reg.addEventListener('updatefound', () => {
-      const nw = reg.installing;
-      nw && nw.addEventListener('statechange', () => {
-        if (nw.state === 'installed' && navigator.serviceWorker.controller) toast('A new version is ready', () => location.reload(), 'Reload');
-      });
-    });
-  }).catch(() => {});
+  // when an updated worker takes over, reload once so page, styles and script all match
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !reloaded && !sheetOpen) { reloaded = true; location.reload(); }
+  });
+  navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).then(reg => reg.update()).catch(() => {});
 }
 })();

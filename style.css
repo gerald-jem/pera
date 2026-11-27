@@ -70,10 +70,13 @@ input.bad{border-color:var(--red)}
 .deskonly{display:none!important}
 .cols{display:block}
 .fab b{font-weight:600;font-size:15px}
+.deskonly[hidden]{display:none!important}
 
 /* ===== desktop & tablet landscape ===== */
 @media (min-width:900px){
-  .deskonly{display:revert!important}
+  .deskonly,.deskonly[hidden]{display:block!important}
+  .fab b.deskonly[hidden]{display:inline!important}
+  .brand.deskonly[hidden],.tab.deskonly[hidden]{display:flex!important}
   .mobonly{display:none!important}
   body{font-size:15px}
   .app{max-width:none;margin:0;padding:28px clamp(24px,3vw,48px) 48px calc(232px + clamp(24px,3vw,48px))}
@@ -95,7 +98,7 @@ input.bad{border-color:var(--red)}
   .tab{flex-direction:row;justify-content:flex-start;gap:12px;font-size:15px;padding:0 12px;min-height:44px;border-radius:10px}
   .tab:hover{background:var(--card)}
   .tab[aria-current=page]{background:color-mix(in srgb,var(--blue) 10%,transparent)}
-  .tab[data-act=settings]{margin-top:auto;display:flex!important}
+  .tab[data-act=settings]{margin-top:auto}
 
   /* two columns */
   .cols{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(320px,1fr);gap:28px;align-items:start}
