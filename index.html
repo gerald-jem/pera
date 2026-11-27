@@ -14,7 +14,7 @@
 <title>Pera</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 
@@ -72,11 +72,27 @@
 
   <section class="view" id="v-bills">
     <h1>Bills</h1>
-    <form id="qbForm" class="quick" autocomplete="off">
-      <label for="qb">Add a bill — just type it</label>
-      <div class="qrow"><input id="qb" enterkeyhint="done" placeholder="SPayLater 10,794 Jan 5" autocapitalize="words"><button class="qgo" id="qbGo" type="submit" disabled>Add</button></div>
+    <form id="qbForm" class="quick" autocomplete="off" novalidate>
+      <div class="qhead"><b>Add a bill</b><button type="button" class="ghost" id="qbMode">Type it instead</button></div>
+      <div id="qbPick">
+        <div class="two">
+          <div><label for="pkName">Bill</label><select id="pkName"></select></div>
+          <div><label for="pkAmt">Amount</label><input id="pkAmt" inputmode="decimal" placeholder="₱0" enterkeyhint="done"></div>
+        </div>
+        <input id="pkOther" placeholder="Name of the bill" maxlength="40" hidden style="margin-top:8px">
+        <div class="three">
+          <div><label for="pkMon">Due month</label><select id="pkMon"></select></div>
+          <div><label for="pkDay">Day</label><select id="pkDay"></select></div>
+          <div><label for="pkN">Payments</label><select id="pkN"></select></div>
+        </div>
+      </div>
+      <div id="qbType" hidden>
+        <label for="qb">Type the bill</label>
+        <input id="qb" enterkeyhint="done" placeholder="SPayLater 10,794 Jan 5 x3" autocapitalize="words">
+        <div class="chips" id="qbChips"></div>
+      </div>
       <div class="qprev" id="qbPrev" aria-live="polite"></div>
-      <div class="chips" id="qbChips"></div>
+      <button class="go" id="qbGo" type="submit" disabled>Add bill</button>
     </form>
     <p class="muted">Tap the circle when paid. Tap a bill to edit or delete it.</p>
     <ul class="list" id="billList"></ul>
@@ -99,8 +115,8 @@
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grab"></div><div id="sheetBody"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"><span id="toastMsg"></span><button id="toastBtn" hidden>Undo</button></div>
 
-<script src="config.js?v=6"></script>
+<script src="config.js?v=7"></script>
 <script src="vendor/supabase.js"></script>
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

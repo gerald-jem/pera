@@ -11,7 +11,7 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const fmtDate = (d, o) => new Date(d + (String(d).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-PH', o || {month: 'short', day: 'numeric', year: 'numeric'});
 // accepts "1,200", "₱500", "1.84+329", "=100-25"
 const parseAmt = s => {
-  s = String(s).replace(/[₱,\s=]/g, '');
+  s = String(s).replace(/[₱,\s=]/g, '').replace(/(\d*\.?\d+)k/gi, (_, n) => String(parseFloat(n) * 1000));
   if (!/^[-+]?\d*\.?\d+([-+]\d*\.?\d+)*$/.test(s)) return NaN;
   return Math.round((s.match(/[-+]?\d*\.?\d+/g) || []).reduce((t, x) => t + parseFloat(x), 0) * 100) / 100;
 };
@@ -249,6 +249,7 @@ function renderBills() {
       <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete ${esc(x.name)}">×</button></li>`;
   }).join('') || '<li class="empty">No bills yet. Type one above.</li>';
   const names = [...new Set((S.meta.bills || []).slice().reverse().map(x => x.name))].slice(0, 6);
+  fillPicker();
   $('qbChips').innerHTML = names.map(n => `<button type="button" class="chip" data-act="qb-name" data-n="${esc(n)}">${esc(n)}</button>`).join('');
 }
 
@@ -285,19 +286,75 @@ function parseBill(text) {
   const known = (S.meta.bills || []).map(x => x.name).find(x => x.toLowerCase() === name.toLowerCase());
   return {name: known || (name ? name[0].toUpperCase() + name.slice(1) : ''), a, dates};
 }
+const PRESETS = ['SPayLater', 'Lazada PayLater', 'GGives', 'Atome', 'Home Credit', 'BillEase', 'Credit card', 'Meralco', 'Internet', 'Rent'];
+const NOPTS = [1, 2, 3, 4, 5, 6, 9, 12, 18, 24];
+let qbMode = store.get('pera:qbmode') === 'type' ? 'type' : 'pick', pickSig = '';
+function setQbMode(m) {
+  qbMode = m; store.set('pera:qbmode', m);
+  $('qbPick').hidden = m !== 'pick'; $('qbType').hidden = m !== 'type';
+  $('qbMode').textContent = m === 'pick' ? 'Type it instead' : 'Pick from lists';
+  quickPreview();
+}
+function fillPicker() {
+  const used = [...new Set((S.meta.bills || []).slice().reverse().map(x => x.name))];
+  const names = [...used, ...PRESETS.filter(p => !used.some(u => u.toLowerCase() === p.toLowerCase()))];
+  const sig = names.join('|');
+  if (sig === pickSig) return;
+  const keep = $('pkName').value;
+  $('pkName').innerHTML = `<option value="">Choose…</option>` +
+    (used.length ? `<optgroup label="Your bills">${used.map(n => `<option>${esc(n)}</option>`).join('')}</optgroup>` : '') +
+    `<optgroup label="Common">${names.slice(used.length).map(n => `<option>${esc(n)}</option>`).join('')}</optgroup>` +
+    `<option value="__other">Other…</option>`;
+  if (keep && [...$('pkName').options].some(o => o.value === keep)) $('pkName').value = keep;
+  if (!pickSig) {   // first time: months, days, payments
+    const t = today();
+    $('pkMon').innerHTML = Array.from({length: 13}, (_, k) => { const d = new Date(t.getFullYear(), t.getMonth() + k, 1); return `<option value="${d.getFullYear()}-${d.getMonth()}">${M[d.getMonth()].slice(0, 3)} ${d.getFullYear()}</option>`; }).join('');
+    $('pkDay').innerHTML = Array.from({length: 31}, (_, k) => `<option>${k + 1}</option>`).join('');
+    $('pkN').innerHTML = NOPTS.map(n => `<option value="${n}">${n === 1 ? 'Once' : n + ' months'}</option>`).join('');
+    $('pkMon').selectedIndex = 1; $('pkDay').value = '5';
+  }
+  pickSig = sig;
+}
+// choosing a bill you've had before fills its usual amount and day, and the month after its latest due date
+function onPickName() {
+  const v = $('pkName').value;
+  $('pkOther').hidden = v !== '__other';
+  if (v === '__other') { $('pkOther').focus(); quickPreview(); return; }
+  const past = (S.meta.bills || []).filter(x => x.name === v).sort((p, q) => p.due.localeCompare(q.due));
+  if (past.length) {
+    const last = past[past.length - 1], d = new Date(last.due + 'T00:00:00'), t = today();
+    $('pkAmt').value = last.a;
+    $('pkDay').value = String(d.getDate());
+    let next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+    const first = new Date(t.getFullYear(), t.getMonth(), 1);
+    if (next < first) next = new Date(t.getFullYear(), t.getMonth() + 1, 1);
+    const val = `${next.getFullYear()}-${next.getMonth()}`;
+    if ([...$('pkMon').options].some(o => o.value === val)) $('pkMon').value = val;
+  }
+  quickPreview();
+  if (!$('pkAmt').value) $('pkAmt').focus();
+}
+function pickedBill() {
+  const nm = $('pkName').value === '__other' ? $('pkOther').value.trim() : $('pkName').value;
+  const [y, m] = $('pkMon').value.split('-').map(Number), day = +$('pkDay').value, n = +$('pkN').value;
+  const dates = isNaN(y) ? [] : Array.from({length: n}, (_, k) => iso(mkDate(y, m + k, day)));
+  return {name: nm, a: parseAmt($('pkAmt').value || 'x'), dates};
+}
 function quickPreview() {
-  const v = $('qb').value.trim(), out = $('qbPrev'), go = $('qbGo');
-  if (!v) { out.innerHTML = '<span class="muted">Try “SPayLater 10,794 Jan 5” or “Lazada 12,252.53 every 16th x3”.</span>'; go.disabled = true; return null; }
-  const p = parseBill(v), miss = [];
-  if (!p.name) miss.push('a name'); if (isNaN(p.a)) miss.push('an amount'); if (!p.dates.length) miss.push('a due date');
+  const out = $('qbPrev'), go = $('qbGo');
+  if (qbMode === 'type' && !$('qb').value.trim()) { out.innerHTML = '<span class="muted">Try “SPayLater 10,794 Jan 5” or “Lazada 12,252.53 every 16th x3”.</span>'; go.disabled = true; return null; }
+  const p = qbMode === 'type' ? parseBill($('qb').value.trim()) : pickedBill(), miss = [];
+  if (!p.name) miss.push('a bill'); if (isNaN(p.a)) miss.push('an amount'); if (!p.dates.length) miss.push('a due date');
+  if (qbMode === 'pick' && !p.name && isNaN(p.a)) { out.innerHTML = '<span class="muted">Choose a bill and enter the amount.</span>'; go.disabled = true; return null; }
   const bits = [`<b>${esc(p.name || '—')}</b>`, isNaN(p.a) ? '<span class="muted">amount?</span>' : esc(peso(p.a, 2))];
   if (p.dates.length) {
     const first = billMonth(p.dates[0]);
-    bits.push(p.dates.length > 1 ? `${p.dates.length} monthly payments from ${esc(fmtDate(p.dates[0]))}` : `due ${esc(fmtDate(p.dates[0]))}`);
+    bits.push(p.dates.length > 1 ? `${p.dates.length} payments, ${esc(fmtDate(p.dates[0], {month: 'short', day: 'numeric'}))} – ${esc(fmtDate(p.dates[p.dates.length - 1]))}` : `due ${esc(fmtDate(p.dates[0]))}`);
     bits.push(`expense in ${M[first.i].slice(0, 3)} ${first.y}${p.dates.length > 1 ? ' onward' : ''}`);
   } else bits.push('<span class="muted">due date?</span>');
   out.innerHTML = bits.join(' · ') + (miss.length ? `<br><span class="muted">Still need ${miss.join(', ')}.</span>` : '');
   go.disabled = !!miss.length;
+  go.textContent = p.dates.length > 1 ? `Add ${p.dates.length} payments` : 'Add bill';
   return miss.length ? null : p;
 }
 function quickAdd() {
@@ -306,10 +363,11 @@ function quickAdd() {
   const keys = ['meta'];
   made.forEach(b => { S.meta.bills.push(b); const m = billMonth(b.due); if (!S.years[m.y]) { ensureYear(m.y); keys.push('y' + m.y); } });
   commit(...keys);
-  $('qb').value = ''; quickPreview();
+  if (qbMode === 'type') $('qb').value = '';
+  else { $('pkName').value = ''; $('pkAmt').value = ''; $('pkOther').value = ''; $('pkOther').hidden = true; $('pkN').value = '1'; }
+  quickPreview();
   toast(made.length > 1 ? `${made.length} ${p.name} payments added` : `${p.name} added`, () => { S.meta.bills = S.meta.bills.filter(b => !made.includes(b)); commit('meta'); });
 }
-
 /* ================= sheet + toast ================= */
 let sheetOpen = false;
 function openSheet(html, onReady) {
@@ -555,8 +613,12 @@ document.addEventListener('click', e => {
 $('fab').dataset.act = 'fab';
 $('addBill').dataset.act = 'bill-add';
 $('qb').addEventListener('input', quickPreview);
+$('pkName').addEventListener('change', onPickName);
+['pkAmt', 'pkOther'].forEach(id => $(id).addEventListener('input', quickPreview));
+['pkMon', 'pkDay', 'pkN'].forEach(id => $(id).addEventListener('change', quickPreview));
+$('qbMode').addEventListener('click', () => setQbMode(qbMode === 'pick' ? 'type' : 'pick'));
 $('qbForm').addEventListener('submit', e => { e.preventDefault(); quickAdd(); });
-quickPreview();
+fillPicker(); setQbMode(qbMode);
 $('settingsBtn').dataset.act = 'settings';
 
 document.addEventListener('keydown', e => {

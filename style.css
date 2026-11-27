@@ -134,10 +134,14 @@ input.bad{border-color:var(--red)}
 .check input{width:22px;height:22px;min-height:0;padding:0;flex:none;-webkit-appearance:auto;appearance:auto;accent-color:var(--blue)}
 
 .quick{background:var(--card);border-radius:16px;padding:4px 14px 14px;margin-bottom:14px}
-.quick label{color:var(--ink);font-weight:600;font-size:14px}
-.qrow{display:flex;gap:8px}.qrow input{flex:1;background:var(--bg)}
-.qgo{background:var(--blue);color:var(--on-blue);font-weight:600;padding:0 20px;min-height:48px}.qgo:disabled{opacity:.35}
 .qprev{font-size:14px;margin-top:8px;min-height:21px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.chips:empty{display:none}
 .chip{min-height:36px;padding:0 14px;border-radius:18px;border:1px solid var(--line);background:var(--bg);font-size:14px}
 @media (min-width:900px){#addBill{width:auto}}
+
+.qhead{display:flex;justify-content:space-between;align-items:center;min-height:44px}.qhead b{font-size:16px}
+.quick input,.quick select{background:var(--bg)}
+.quick select{background-image:linear-gradient(45deg,transparent 50%,var(--mute) 50%),linear-gradient(135deg,var(--mute) 50%,transparent 50%);background-position:calc(100% - 17px) 21px,calc(100% - 12px) 21px;background-size:5px 5px;background-repeat:no-repeat;padding-right:28px}
+.three{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.8fr) minmax(0,1.1fr);gap:8px}
+.quick .go{margin-top:12px}.quick .go:disabled{opacity:.4}
+.quick #qbType .chips{margin-top:8px}
