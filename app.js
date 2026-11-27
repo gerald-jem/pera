@@ -1154,6 +1154,8 @@ const CATS = [
   ['Transfers', /sent to|transfer to|instapay|pesonet|send money|sent money|fund transfer/],
 ];
 const CAT_NAMES = [...CATS.map(c => c[0]), 'Other'];
+const CAT_COL = {'Travel': '#0ea5e9', 'Food & drinks': '#f97316', 'Groceries': '#22c55e', 'Bills & PayLater': '#ef4444', 'Utilities & load': '#eab308', 'Subscriptions & games': '#a855f7', 'Transport': '#14b8a6', 'Shopping': '#ec4899', 'Health': '#06b6d4', 'Fees & taxes': '#78716c', 'Cash withdrawals': '#84cc16', 'Transfers': '#6366f1', 'Other': '#94a3b8', 'No description': '#64748b'};
+const catCol = c => CAT_COL[c] || '#94a3b8';
 // your own choices win: meta.catRules = {merchant: category}
 const catOf = (n, bill) => {
   if (!n) return 'No description';
@@ -1250,7 +1252,7 @@ function renderInsights(ser) {
   <div class="insgrid">
     <section class="card inscard"><div class="inshead"><h3>Where your money goes</h3><button class="chip trchip" data-act="ins-tr" aria-pressed="${insTr}">${insTr ? '✓ ' : ''}Include transfers</button></div>
       <p class="muted">${esc(peso(total))} spent in ${pLabel}${!insTr && moved ? ` · ${esc(peso(moved))} moved between accounts, not counted` : ''}</p>
-      ${cats.length ? `<div class="catrows">${cats.map(([c, v]) => `<button class="cr" data-act="ins-cat" data-c="${esc(c)}"><span>${esc(c)}</span><i><b style="width:${(v / maxC * 100).toFixed(1)}%"></b></i><span>${esc(pesoS(v))}<small>${total ? Math.round(v / total * 100) : 0}%</small></span></button>`).join('')}</div>
+      ${cats.length ? `<div class="catrows">${cats.map(([c, v]) => `<button class="cr" data-act="ins-cat" data-c="${esc(c)}" style="--c:${catCol(c)}"><span><b class="catdot"></b>${esc(c)}</span><i><b style="width:${(v / maxC * 100).toFixed(1)}%"></b></i><span>${esc(pesoS(v))}<small>${total ? Math.round(v / total * 100) : 0}%</small></span></button>`).join('')}</div>
       <p class="muted">Tap a category to see what’s in it and move merchants to the right one.</p>` : '<p class="empty">No spending in this period.</p>'}
       ${noDesc > 0 ? `<p class="muted">“No description” is spending without a note, mostly from your spreadsheet. Imported statements and new entries are sorted automatically.</p>` : ''}</section>
     <section class="card inscard"><h3>Month vs month</h3><p class="muted">Average spending ${esc(peso(avgExp))} a month</p>
@@ -1633,6 +1635,18 @@ function acctForm(j) {
   });
 }
 
+/* ---- look: theme, accent colour, colourful surfaces (this device) ---- */
+const ACCENTS = [['blue', 'Blue', '#2f7fd0'], ['teal', 'Teal', '#14a396'], ['purple', 'Purple', '#8b5cf6'], ['pink', 'Pink', '#e2468e'], ['orange', 'Orange', '#ea6a26'], ['green', 'Green', '#22a052']];
+const look = () => ({theme: 'system', accent: 'blue', style: 'plain', ...(store.get('pera:look') || {})});
+function applyLook() {
+  const L = look(), R = document.documentElement;
+  if (L.theme === 'system') delete R.dataset.theme; else R.dataset.theme = L.theme;
+  if (L.accent === 'blue') delete R.dataset.accent; else R.dataset.accent = L.accent;
+  if (L.style === 'colorful') R.dataset.style = 'colorful'; else delete R.dataset.style;
+  requestAnimationFrame(() => { const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = getComputedStyle(R).getPropertyValue('--bg').trim(); });
+}
+applyLook();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyLook);
 function settings() {
   const n = dirty.size;
   openSheet(`<div class="sheethead"><h2>Settings</h2><button type="button" class="ghost" data-act="close">Done</button></div>
@@ -1642,6 +1656,13 @@ function settings() {
       ${lastSynced ? `<br><span class="muted">Last synced ${esc(new Date(lastSynced).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}))}</span>` : ''}</div>
     ${syncErr && syncErr.auth ? '<button class="go" data-act="signout">Sign in again</button>' : ''}
     <button class="go" data-act="sync-now">Sync now</button>
+    <h2>Look</h2>
+    <label>Theme</label>
+    <div class="seg lookseg">${[['system', 'Match phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => `<button data-act="look" data-k="theme" data-v="${k}" aria-pressed="${look().theme === k}">${l}</button>`).join('')}</div>
+    <label>Colour</label>
+    <div class="swatches">${ACCENTS.map(([k, l, c]) => `<button class="swatch" style="background:${c}" data-act="look" data-k="accent" data-v="${k}" aria-pressed="${look().accent === k}" aria-label="${l}" title="${l}"></button>`).join('')}</div>
+    <div class="switchrow"><span><b>Colourful</b><br><span class="muted">Tints cards and the top of the screen with your colour.</span></span>
+      <button class="switch" role="switch" aria-checked="${look().style === 'colorful'}" data-act="look" data-k="style" data-v="${look().style === 'colorful' ? 'plain' : 'colorful'}" aria-label="Colourful"></button></div>
     <h2>App lock</h2>
     <div class="switchrow"><span><b>Lock with fingerprint</b><br><span class="muted">Asks for your fingerprint or face when you open Pera and after a minute away. This device only.</span></span>
       <button class="switch" role="switch" aria-checked="${!!lockState}" data-act="lock-toggle" aria-label="Lock with fingerprint"></button></div>
@@ -2313,6 +2334,12 @@ document.addEventListener('click', e => {
   const d = el.dataset, j = d.j;
   switch (d.act) {
     case 'close': return closeSheet();
+    case 'look': {
+      store.set('pera:look', {...look(), [d.k]: d.v}); applyLook();
+      if (d.k === 'style') { el.setAttribute('aria-checked', d.v === 'colorful'); el.dataset.v = d.v === 'colorful' ? 'plain' : 'colorful'; }
+      else document.querySelectorAll(`[data-act=look][data-k=${d.k}]`).forEach(b => b.setAttribute('aria-pressed', b.dataset.v === d.v));
+      drawChart(); return;
+    }
     case 'snap-restore': {
       const sn = (store.get(kSnaps()) || [])[+d.k]; if (!sn) return;
       snapshot('force');                                   // keep what we have now too

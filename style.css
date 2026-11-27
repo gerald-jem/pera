@@ -1,6 +1,20 @@
 /* Pera — pocket ledger. Prussian for money in, carmine for money out. */
 :root{color-scheme:light dark;--bg:#fff;--card:#f4f6f9;--ink:#10131a;--mute:#5b6472;--line:#e3e7ee;--blue:#0b4f8a;--red:#c1121f;--sheet:#fff;--on-blue:#fff}
-@media(prefers-color-scheme:dark){:root{--bg:#0f1217;--card:#171b22;--ink:#e9edf3;--mute:#9aa4b2;--line:#262c36;--blue:#6fb0ee;--red:#ff6b74;--sheet:#161a21;--on-blue:#0f1217}}
+:root[data-theme=light]{color-scheme:light}
+:root[data-theme=dark]{color-scheme:dark;--bg:#0f1217;--card:#171b22;--ink:#e9edf3;--mute:#9aa4b2;--line:#262c36;--blue:#6fb0ee;--red:#ff6b74;--sheet:#161a21;--on-blue:#0f1217}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1217;--card:#171b22;--ink:#e9edf3;--mute:#9aa4b2;--line:#262c36;--blue:#6fb0ee;--red:#ff6b74;--sheet:#161a21;--on-blue:#0f1217}}
+/* accent colours: light / dark */
+:root[data-accent=teal]{--blue:#0f766e}:root[data-theme=dark][data-accent=teal]{--blue:#3dd6c4}@media(prefers-color-scheme:dark){:root:not([data-theme=light])[data-accent=teal]{--blue:#3dd6c4}}
+:root[data-accent=purple]{--blue:#6d28d9}:root[data-theme=dark][data-accent=purple]{--blue:#b79cff}@media(prefers-color-scheme:dark){:root:not([data-theme=light])[data-accent=purple]{--blue:#b79cff}}
+:root[data-accent=pink]{--blue:#be185d}:root[data-theme=dark][data-accent=pink]{--blue:#ff8cc6}@media(prefers-color-scheme:dark){:root:not([data-theme=light])[data-accent=pink]{--blue:#ff8cc6}}
+:root[data-accent=orange]{--blue:#c2410c}:root[data-theme=dark][data-accent=orange]{--blue:#ffa266}@media(prefers-color-scheme:dark){:root:not([data-theme=light])[data-accent=orange]{--blue:#ffa266}}
+:root[data-accent=green]{--blue:#15803d}:root[data-theme=dark][data-accent=green]{--blue:#5fd68a}@media(prefers-color-scheme:dark){:root:not([data-theme=light])[data-accent=green]{--blue:#5fd68a}}
+/* colourful: tint surfaces with the accent */
+:root[data-style=colorful]{--card:color-mix(in srgb,var(--blue) 9%,var(--bg));--line:color-mix(in srgb,var(--blue) 16%,var(--bg));--sheet:color-mix(in srgb,var(--blue) 5%,var(--bg))}
+:root[data-style=colorful] body{background:linear-gradient(180deg,color-mix(in srgb,var(--blue) 16%,var(--bg)) 0,var(--bg) 340px) no-repeat,var(--bg)}
+:root[data-style=colorful] .hcard.hero,:root[data-style=colorful] .savtotal,:root[data-style=colorful] .billsum{background:linear-gradient(135deg,color-mix(in srgb,var(--blue) 22%,var(--bg)),color-mix(in srgb,var(--blue) 6%,var(--bg)));border-radius:18px}
+:root[data-style=colorful] .hcard.hero{padding:16px}
+:root[data-style=colorful] .tile,:root[data-style=colorful] .mini button{background:color-mix(in srgb,var(--blue) 6%,var(--bg))}
 *{box-sizing:border-box;min-width:0}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow-x:clip;-webkit-tap-highlight-color:transparent;overscroll-behavior-y:none}
@@ -42,7 +56,7 @@ h1{font-size:32px;line-height:1.05;margin:4px 0 14px}h2{font-size:20px;margin:26
 .tabs nav{max-width:520px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr);align-items:center}
 .tab{display:flex;flex-direction:column;align-items:center;font-size:12px;color:var(--mute);padding:8px 0 6px;gap:2px;border-radius:0}.tab[aria-current=page]{color:var(--blue);font-weight:600}
 .tab svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
-.fab{width:56px;height:56px;border-radius:50%;background:var(--blue);color:var(--on-blue);font-size:30px;line-height:1;margin:-20px auto 0;display:grid;place-items:center;box-shadow:0 6px 18px #0b4f8a55}
+.fab{width:56px;height:56px;border-radius:50%;background:var(--blue);color:var(--on-blue);font-size:30px;line-height:1;margin:-20px auto 0;display:grid;place-items:center;box-shadow:0 6px 18px color-mix(in srgb,var(--blue) 35%,transparent)}
 .scrim{position:fixed;inset:0;background:#0007;z-index:10;opacity:0;pointer-events:none;transition:opacity .2s}.scrim.on{opacity:1;pointer-events:auto}
 .sheet{position:fixed;left:0;right:0;bottom:0;z-index:11;background:var(--sheet);border-radius:22px 22px 0 0;max-width:520px;margin:0 auto;padding:8px 18px calc(env(safe-area-inset-bottom) + 18px);max-height:90vh;overflow-y:auto;transform:translateY(105%);visibility:hidden;transition:transform .22s ease,visibility 0s .22s}
 .sheet.on{transform:none;visibility:visible;transition:transform .22s ease}
@@ -259,8 +273,8 @@ html.applock #mainView,html.applock .tabs,html.applock .sheet,html.applock .toas
 .insgrid{display:grid;gap:12px;margin-top:12px}
 .inscard{margin:0}.inscard h3{font:600 17px Literata,Georgia,serif;margin:0 0 2px}.inscard>.muted{margin:0 0 10px}
 .catrows .cr{display:grid;grid-template-columns:minmax(0,9em) minmax(0,1fr) 5.2em;gap:10px;align-items:center;font-size:14px;padding:5px 0}
-.catrows .cr i{display:block;height:10px;border-radius:5px;background:color-mix(in srgb,var(--red) 12%,transparent);overflow:hidden}
-.catrows .cr i b{display:block;height:100%;background:var(--red);border-radius:5px;opacity:.75}
+.catrows .cr i{display:block;height:10px;border-radius:5px;background:color-mix(in srgb,var(--c,var(--red)) 14%,transparent);overflow:hidden}
+.catrows .cr i b{display:block;height:100%;background:var(--c,var(--red));border-radius:5px;opacity:.85}
 .catrows .cr span:last-child{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.catrows small{display:block;color:var(--mute);font-size:12px}
 .mvm .mrow2{display:grid;grid-template-columns:2.8em minmax(0,1fr) 5em 6.6em;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
 .mvm .ml small{display:block;color:var(--mute);font-size:11px}
@@ -359,3 +373,9 @@ label small.muted{font-weight:400}
 .pbrow small{display:block;font-size:12px;color:var(--mute)}.pbrow b{font-variant-numeric:tabular-nums;white-space:nowrap}.pbrow .chev{color:var(--mute)}
 .grab{height:5px;position:relative}.grab::after{content:"";position:absolute;left:-30px;right:-30px;top:-14px;bottom:-14px}
 #sync{cursor:pointer}
+
+/* look settings */
+.swatches{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+.swatch{width:40px;height:40px;border-radius:50%;border:3px solid var(--bg);box-shadow:0 0 0 2px var(--line);cursor:pointer;padding:0}
+.swatch[aria-pressed=true]{box-shadow:0 0 0 3px var(--ink)}
+.catrows .catdot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--c);margin-right:7px;vertical-align:1px}
