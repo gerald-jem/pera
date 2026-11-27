@@ -205,8 +205,12 @@ const chartRO = new ResizeObserver(drawChart); chartRO.observe($('chart'));
 function renderMonths(ser) {
   const ys = Object.keys(S.years).sort();
   if (!ys.includes(selYear) && ys.length) selYear = ys.includes(String(today().getFullYear())) ? String(today().getFullYear()) : ys[ys.length - 1];
-  $('yearSeg').innerHTML = ys.map(y => `<button data-act="year" data-y="${esc(y)}" aria-pressed="${y === selYear}">${esc(y)}</button>`).join('')
-    + `<button data-act="year" data-y="+" aria-label="Add a year">＋ Year</button>`;
+  const lo = ys.length ? +ys[0] - 1 : today().getFullYear() - 1, hi = ys.length ? +ys[ys.length - 1] + 1 : today().getFullYear();
+  $('yearSeg').innerHTML = `<button class="yadd" data-act="year" data-y="-" aria-label="Add ${lo}" title="Add ${lo}">＋</button>`
+    + ys.map(y => `<button data-act="year" data-y="${esc(y)}" aria-pressed="${y === selYear}">${esc(y)}</button>`).join('')
+    + `<button class="yadd" data-act="year" data-y="+" aria-label="Add ${hi}" title="Add ${hi}">＋</button>`;
+  { const seg = $('yearSeg'), on = seg.querySelector('[aria-pressed=true]');   // keep the chosen year in view when the row scrolls
+    if (on && seg.scrollWidth > seg.clientWidth) seg.scrollLeft = on.offsetLeft - seg.clientWidth / 2 + on.offsetWidth / 2; }
   const rows = ser.filter(p => p.y === selYear);
   const sel = desk.matches && detail && detail.y === selYear ? detail.i : -1;
   $('monthList').innerHTML = rows.map(p => `<li class="${p.i === sel ? 'sel' : p.now ? 'now' : ''}"><button class="rowbtn" data-act="month" data-i="${p.i}">
@@ -522,23 +526,6 @@ function billForm(j) {
       toast(v.count ? `${j == null ? 'Bill added' : 'Bill saved'} · expense in ${M[billMonth(d).i]} ${billMonth(d).y}` : (j == null ? 'Bill added' : 'Bill saved'));
     });
     const del = $('bdel'); if (del) del.addEventListener('click', () => { closeSheet(); removeBill(j); });
-  });
-}
-function addYearSheet() {
-  const have = Object.keys(S.years).map(Number), cy = today().getFullYear();
-  const lo = have.length ? Math.min(...have) : cy, hi = have.length ? Math.max(...have) : cy;
-  const quick = [...new Set([lo - 2, lo - 1, hi + 1, cy - 1, cy, cy + 1])].filter(y => !have.includes(y)).sort();
-  const binned = (S.meta.trash || []).map(t => t.y);
-  const btn = y => binned.includes(String(y))
-    ? `<button class="chip" data-act="bin-restore" data-y="${y}">${y} · restore from bin</button>`
-    : `<button class="chip" data-act="year-add" data-y="${y}">${y}${y < lo ? ' · earlier' : ''}</button>`;
-  openSheet(`<div class="sheethead"><h2>Add a year</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
-    <div class="chips" style="margin:6px 0 4px">${quick.map(btn).join('')}</div>
-    <label for="yrAny">Or any year</label>
-    <div class="qrow" style="display:flex;gap:8px"><select id="yrAny" style="flex:1">${Array.from({length: 31}, (_, k) => cy - 20 + k).filter(y => !have.includes(y)).map(y => `<option ${y === lo - 1 ? 'selected' : ''}>${y}</option>`).join('')}</select>
-    <button class="go" style="width:auto;margin:0;padding:0 22px" type="button" id="yrGo">Add</button></div>
-    <p class="muted">Adding an earlier year changes the totals for later years: whatever is left at the end of it carries forward.${binned.length ? ' Years in the recycle bin can be restored with their entries.' : ''}</p>`, () => {
-    $('yrGo').addEventListener('click', () => { const y = $('yrAny').value; binned.includes(y) ? restoreYear(y) : addYear(y); });
   });
 }
 function addYear(y) {
@@ -1114,7 +1101,11 @@ document.addEventListener('click', e => {
     }
     case 'month': return monthSheet(selYear, +d.i);
     case 'year':
-      if (d.y === '+') return addYearSheet();
+      if (d.y === '+' || d.y === '-') {
+        const ys = Object.keys(S.years).map(Number), cy = today().getFullYear();
+        const y = String(!ys.length ? cy : d.y === '-' ? Math.min(...ys) - 1 : Math.max(...ys) + 1);
+        return (S.meta.trash || []).some(t => t.y === y) ? restoreYear(y) : addYear(y);
+      }
       else { selYear = d.y; if (desk.matches) detail = {y: d.y, i: detail && detail.y === d.y ? detail.i : 0}; render(); }
       return;
     case 'year-del': return confirmDeleteYear(d.y);
