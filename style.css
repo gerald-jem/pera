@@ -278,3 +278,8 @@ html.applock #mainView,html.applock .tabs,html.applock .sheet,html.applock .toas
 .yrgrid b{font:600 20px Literata,Georgia,serif}
 .yrfacts{margin:0;padding-left:18px;font-size:14px;line-height:1.7}
 @media (min-width:900px){.insgrid{grid-template-columns:repeat(2,minmax(0,1fr))}#insights{max-width:1180px}.yrgrid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+.homelinks{margin-top:4px}.homelinks .plain{width:auto;margin:0;padding:0 2px}
+#homeList:empty{display:none}
+@media (min-width:900px){.homecols{grid-template-columns:minmax(0,1fr)}.homecols .fig{height:320px}#v-home .trio{max-width:720px}}
+@media (max-width:899px){#insights>.inshead .insseg{width:100%}#insights>.inshead .insseg button{flex:1 1 0;padding:0 4px;font-size:13px}}

@@ -152,7 +152,7 @@ function renderHome(ser) {
     $('homeTotal').textContent = '₱0';
     $('homeChg').textContent = '';
     $('homeTrio').innerHTML = '';
-    $('homeListH').textContent = 'Get started';
+    $('homeMonthLink').hidden = true;
     $('homeList').innerHTML = `<li><button class="rowbtn" data-act="settings"><span class="dot s">⇪</span><span class="t">Import your backup<small>Load pera-backup.json from Settings</small></span></button></li>
       <li><button class="rowbtn" data-act="statement"><span class="dot s">⇩</span><span class="t">Import a bank statement<small>Excel, PDF or CSV</small></span></button></li>
       <li><button class="rowbtn" data-act="fab"><span class="dot i">+</span><span class="t">Or start fresh<small>Add your first income or expense</small></span></button></li>`;
@@ -167,8 +167,9 @@ function renderHome(ser) {
   else $('homeChg').textContent = '';
   $('homeTrio').innerHTML = [['Income', cur.inc, 'up'], ['Spent', cur.exp, 'dn'], ['Saved', cur.sav, '']]
     .map(([l, v, c]) => `<div class="tile"><span>${l}</span><b class="${c}">${esc(peso(v))}</b></div>`).join('');
-  $('homeListH').textContent = `${M[cur.i]} entries`;
-  $('homeList').innerHTML = entryRows(cur.y, cur.i) || '<li class="empty">Nothing logged this month yet.</li>';
+  $('homeList').innerHTML = '';
+  const ml = $('homeMonthLink'); ml.hidden = false; ml.dataset.y = cur.y; ml.dataset.i = cur.i;
+  ml.textContent = `See ${M[cur.i]}’s entries →`;
   drawChart();
 }
 function setEye() {
@@ -1674,6 +1675,7 @@ document.addEventListener('click', e => {
     case 'settings': return settings();
     case 'edit-entry': { const x = S.years[d.y][+d.i][d.t].find(z => z.id === d.id); if (x) entryForm({t: d.t, y: d.y, i: +d.i, id: d.id, a: x.a, n: x.n, d: x.d, edit: true}); return; }
     case 'edit-sav': return entryForm({t: 'sav', y: d.y, i: +d.i, a: S.years[d.y][+d.i].sav || '', edit: true});
+    case 'goto-month': { showView('months'); selYear = d.y; render(); return monthSheet(d.y, +d.i); }
     case 'add-in-month': return entryForm({y: d.y, i: +d.i});
     case 'add-dep-month': return entryForm({t: 'dep', y: d.y, i: +d.i});
     case 'entry-del': {
