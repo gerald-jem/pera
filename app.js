@@ -808,10 +808,19 @@ const CATS = [
   ['Transport', /\bgrab\b|angkas|joyride|move ?it|\blrt|\bmrt|beep|petron|shell|caltex|seaoil|cleanfuel|\bgas\b|toll|autosweep|easytrip|parking|taxi|bus\b|jeep/],
   ['Shopping', /shopee|lazada|zalora|uniqlo|\bh&m|sm store|\bmall\b|amazon|temu|shein|tiktok shop|decathlon|ikea|ace hardware|national book/],
   ['Health', /mercury drug|watsons|pharmacy|botika|hospital|clinic|dental|medical|lab test|doctor/],
+  ['Fees & taxes', /withholding tax|tax withheld|service charge|bank fee|annual fee|transaction fee|convenience fee|penalty|late fee|\bfee\b|\bcharge\b/],
   ['Cash withdrawals', /\batm\b|withdraw/],
   ['Transfers', /sent to|transfer to|instapay|pesonet|send money|sent money|fund transfer/],
 ];
-const catOf = n => { if (!n) return 'No description'; const s = n.toLowerCase(); const c = CATS.find(([, re]) => re.test(s)); return c ? c[0] : 'Other'; };
+const CAT_NAMES = [...CATS.map(c => c[0]), 'Other'];
+// your own choices win: meta.catRules = {merchant: category}
+const catOf = (n, bill) => {
+  if (!n) return 'No description';
+  const rules = S.meta.catRules || {}, m = merchantOf(n, bill); if (m && rules[m]) return rules[m];
+  const s = n.toLowerCase(); const c = CATS.find(([, re]) => re.test(s)); return c ? c[0] : 'Other';
+};
+const isTransfer = (n, bill) => catOf(n, bill) === 'Transfers';
+let insTr = store.get('pera:insTr') === true;   // include transfers in spending?
 const BRANDS = [['Shopee', /shopee/], ['Lazada Travel', /lazada travel/], ['Lazada', /lazada/], ['Food Panda', /food ?panda|fp\*/], ['Grab', /\bgrab/], ['Steam', /steam/], ['GCash', /gcash/],
   ['Netflix', /netflix/], ['Spotify', /spotify/], ['YouTube', /youtube/], ['Apple', /apple\.com|itunes/], ['Google', /google/], ['Jollibee', /jollibee/], ['McDonald’s', /mcdo|mcdonald/],
   ['Starbucks', /starbucks/], ['Meralco', /meralco/], ['Mercury Drug', /mercury drug/], ['Watsons', /watsons/], ['7-Eleven', /7-?eleven/], ['Puregold', /puregold/], ['SM Supermarket', /sm supermarket/], ['Angkas', /angkas/], ['Agoda', /agoda/]];
@@ -839,55 +848,81 @@ function spendingIn(months) {
     m.exp.forEach(x => rows.push({n: x.n || '', a: +x.a, y, i}));
     billsIn(y, i).forEach(b => rows.push({n: b.name, a: +b.a, y, i, bill: true}));
   }
-  return rows;
+  return rows.map(r => ({...r, cat: catOf(r.n, r.bill)}));
+}
+// a month's income and spending as Insights counts them (transfers out unless switched on)
+function monthFlows(y, i) {
+  const m = S.years[y] && S.years[y][i]; if (!m) return {inc: 0, exp: 0, tin: 0, tout: 0};
+  const sp = spendingIn([{y, i}]), tout = sp.filter(r => r.cat === 'Transfers').reduce((s, r) => s + r.a, 0);
+  const tin = m.inc.filter(x => x.n && isTransfer(x.n)).reduce((s, x) => s + +x.a, 0);
+  const inc = m.inc.reduce((s, x) => s + +x.a, 0), exp = sp.reduce((s, r) => s + r.a, 0);
+  return insTr ? {inc, exp, tin, tout} : {inc: inc - tin, exp: exp - tout, tin, tout};
+}
+function catSheet(cat) {
+  const rows = spendingIn(periodMonths(insP)).filter(r => r.cat === cat), by = {};
+  rows.forEach(r => { const m = merchantOf(r.n, r.bill) || (r.n ? r.n : 'No description'); (by[m] = by[m] || {m, a: 0, c: 0, last: r}); by[m].a += r.a; by[m].c++; });
+  const list = Object.values(by).sort((a, b) => b.a - a.a);
+  openSheet(`<div class="sheethead"><h2>${esc(cat)}</h2><button class="ghost" data-act="close">Done</button></div>
+    <p class="muted">${esc(peso(rows.reduce((s, r) => s + r.a, 0)))} · ${rows.length} payment${rows.length === 1 ? '' : 's'} in ${{month: 'this month', '3m': 'the last 3 months', year: 'this year', lastyear: 'last year'}[insP]}${cat === 'No description' ? '. Add a note to these entries in Months to sort them.' : '. Tap a merchant to move it to another category.'}</p>
+    <ul class="list">${list.map(x => `<li><button class="rowbtn" ${cat === 'No description' ? 'disabled' : `data-act="cat-pick" data-m="${esc(x.m)}" data-c="${esc(cat)}"`}><span class="t">${esc(x.m)}<small>${x.c} time${x.c === 1 ? '' : 's'}${(S.meta.catRules || {})[x.m] ? ' · your choice' : ''}</small></span><b class="amt">${esc(peso(x.a))}</b></button></li>`).join('')}</ul>`);
+}
+function catPick(m, from) {
+  const rules = S.meta.catRules || {};
+  openSheet(`<div class="sheethead"><h2>${esc(m)}</h2><button class="ghost" data-act="ins-cat" data-c="${esc(from)}">Back</button></div>
+    <p class="muted">Which category should ${esc(m)} be in? Pera will remember this for all its payments.</p>
+    <div class="chips catpick">${CAT_NAMES.map(c => `<button class="chip" data-act="cat-set" data-m="${esc(m)}" data-c="${esc(c)}" aria-pressed="${c === from}">${esc(c)}</button>`).join('')}</div>
+    ${rules[m] ? `<button class="plain" data-act="cat-set" data-m="${esc(m)}" data-c="">Go back to automatic</button>` : ''}`);
 }
 function renderInsights(ser) {
   const box = $('insights'); if (!box) return;
   if (!Object.keys(S.years).length) { box.innerHTML = ''; return; }
-  const months = periodMonths(insP), rows = spendingIn(months), total = rows.reduce((s, r) => s + r.a, 0);
+  const months = periodMonths(insP), allRows = spendingIn(months), rows = insTr ? allRows : allRows.filter(r => r.cat !== 'Transfers'), total = rows.reduce((s, r) => s + r.a, 0);
+  const moved = allRows.filter(r => r.cat === 'Transfers').reduce((s, r) => s + r.a, 0);
   const pLabel = {month: 'this month', '3m': 'the last 3 months', year: 'this year', lastyear: 'last year'}[insP];
   // 1 — where the money goes
-  const byCat = {}; rows.forEach(r => { const c = catOf(r.n); byCat[c] = (byCat[c] || 0) + r.a; });
+  const byCat = {}; rows.forEach(r => { byCat[r.cat] = (byCat[r.cat] || 0) + r.a; });
   const cats = Object.entries(byCat).filter(([, v]) => v > 0.004).sort((a, b) => b[1] - a[1]);
   const maxC = Math.max(1, ...cats.map(c => c[1]));
   const noDesc = byCat['No description'] || 0;
   // 2 — month vs month (last 6 months up to now)
   const t = today(), last6 = [];
-  for (let k = 5; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); const p = ser.find(q => +q.y === d.getFullYear() && q.i === d.getMonth()); if (p) last6.push(p); }
+  for (let k = 5; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); const p = ser.find(q => +q.y === d.getFullYear() && q.i === d.getMonth()); if (p) last6.push({...p, ...monthFlows(p.y, p.i)}); }
   const maxM = Math.max(1, ...last6.flatMap(p => [p.inc, p.exp]));
   const avgExp = last6.length ? last6.reduce((s, p) => s + p.exp, 0) / last6.length : 0;
   // 3 — top merchants
-  const byM = {}; rows.forEach(r => { const m = merchantOf(r.n, r.bill); if (!m || catOf(r.n) === 'Transfers') return; (byM[m] = byM[m] || {n: m, a: 0, c: 0}); byM[m].a += r.a; byM[m].c++; });
+  const byM = {}; rows.forEach(r => { const m = merchantOf(r.n, r.bill); if (!m || r.cat === 'Transfers') return; (byM[m] = byM[m] || {n: m, a: 0, c: 0}); byM[m].a += r.a; byM[m].c++; });
   const merch = Object.values(byM).filter(m => m.a > 0).sort((a, b) => b.a - a.a).slice(0, 8);
   // 4 — year in review
   const ys = Object.keys(S.years).sort(); if (!insYear || !S.years[insYear]) insYear = ys.includes(String(t.getFullYear())) ? String(t.getFullYear()) : ys[ys.length - 1];
-  const yr = ser.filter(p => p.y === insYear && p.past), yInc = yr.reduce((s, p) => s + p.inc, 0), yExp = yr.reduce((s, p) => s + p.exp, 0), ySav = yr.reduce((s, p) => s + p.sav, 0);
+  const yr = ser.filter(p => p.y === insYear && p.past).map(p => ({...p, ...monthFlows(p.y, p.i)})), yInc = yr.reduce((s, p) => s + p.inc, 0), yExp = yr.reduce((s, p) => s + p.exp, 0), ySav = yr.reduce((s, p) => s + p.sav, 0);
   const yEnd = +insYear === t.getFullYear() ? todayIso() : `${insYear}-12-31`, yStart = `${+insYear - 1}-12-31`;
   const potGrow = pots().reduce((s, p) => s + potValueAt(p, yEnd) - potValueAt(p, yStart), 0);
   const big = [...yr].sort((a, b) => b.exp - a.exp)[0], best = [...yr].sort((a, b) => (b.inc - b.exp) - (a.inc - a.exp))[0];
   const yRows = spendingIn(yr.map(p => ({y: p.y, i: p.i})));
-  const yCat = {}; yRows.forEach(r => { const c = catOf(r.n); if (c !== 'No description') yCat[c] = (yCat[c] || 0) + r.a; });
+  const yCat = {}; yRows.forEach(r => { const c = r.cat; if (c !== 'No description' && (insTr || c !== 'Transfers')) yCat[c] = (yCat[c] || 0) + r.a; });
   const topCat = Object.entries(yCat).sort((a, b) => b[1] - a[1])[0];
-  const yM = {}; yRows.forEach(r => { const m = merchantOf(r.n, r.bill); if (m && catOf(r.n) !== 'Transfers') yM[m] = (yM[m] || 0) + r.a; });
+  const yM = {}; yRows.forEach(r => { const m = merchantOf(r.n, r.bill); if (m && r.cat !== 'Transfers') yM[m] = (yM[m] || 0) + r.a; });
   const topM = Object.entries(yM).sort((a, b) => b[1] - a[1])[0];
   const rate = (inc, exp) => inc > 0 ? Math.round((inc - exp) / inc * 100) : null;
 
   box.innerHTML = `<div class="inshead"><h2>Insights</h2><div class="seg insseg">${[['month', 'This month'], ['3m', '3 months'], ['year', 'This year'], ['lastyear', 'Last year']].map(([k, l]) => `<button data-act="ins-p" data-k="${k}" aria-pressed="${k === insP}">${l}</button>`).join('')}</div></div>
   <div class="insgrid">
-    <section class="card inscard"><h3>Where your money goes</h3><p class="muted">${esc(peso(total))} spent in ${pLabel}</p>
-      ${cats.length ? `<div class="catrows">${cats.map(([c, v]) => `<div class="cr"><span>${esc(c)}</span><i><b style="width:${(v / maxC * 100).toFixed(1)}%"></b></i><span>${esc(pesoS(v))}<small>${total ? Math.round(v / total * 100) : 0}%</small></span></div>`).join('')}</div>` : '<p class="empty">No spending in this period.</p>'}
+    <section class="card inscard"><div class="inshead"><h3>Where your money goes</h3><button class="chip trchip" data-act="ins-tr" aria-pressed="${insTr}">${insTr ? '✓ ' : ''}Include transfers</button></div>
+      <p class="muted">${esc(peso(total))} spent in ${pLabel}${!insTr && moved ? ` · ${esc(peso(moved))} moved between accounts, not counted` : ''}</p>
+      ${cats.length ? `<div class="catrows">${cats.map(([c, v]) => `<button class="cr" data-act="ins-cat" data-c="${esc(c)}"><span>${esc(c)}</span><i><b style="width:${(v / maxC * 100).toFixed(1)}%"></b></i><span>${esc(pesoS(v))}<small>${total ? Math.round(v / total * 100) : 0}%</small></span></button>`).join('')}</div>
+      <p class="muted">Tap a category to see what’s in it and move merchants to the right one.</p>` : '<p class="empty">No spending in this period.</p>'}
       ${noDesc > 0 ? `<p class="muted">“No description” is spending without a note, mostly from your spreadsheet. Imported statements and new entries are sorted automatically.</p>` : ''}</section>
     <section class="card inscard"><h3>Month vs month</h3><p class="muted">Average spending ${esc(peso(avgExp))} a month</p>
       <div class="mvm">${last6.map((p, k) => { const prev = last6[k - 1], ch = prev && prev.exp ? Math.round((p.exp - prev.exp) / prev.exp * 100) : null, r = rate(p.inc, p.exp);
         return `<div class="mrow2"><span class="ml">${M[p.i].slice(0, 3)}${p.past ? '' : '<small>plan</small>'}</span><span class="mbars"><i class="bi" style="width:${(p.inc / maxM * 100).toFixed(1)}%"></i><i class="be" style="width:${(p.exp / maxM * 100).toFixed(1)}%"></i></span>
-          <span class="mv"><b class="up">+${esc(pesoS(p.inc))}</b><b class="dn">−${esc(pesoS(p.exp))}</b></span><span class="mr2">${r == null ? '—' : r + '% kept'}${ch == null ? '' : ch === 0 ? '<small>same spending</small>' : `<small class="${ch > 0 ? 'dn' : 'up'}">${ch > 0 ? '▲' : '▼'} ${Math.abs(ch)}% spent</small>`}</span></div>`; }).join('')}</div>
-      <p class="muted"><i class="key bi"></i> income · <i class="key be"></i> spent · “kept” = share of income not spent</p></section>
+          <span class="mv"><b class="up">+${esc(pesoS(p.inc))}</b><b class="dn">−${esc(pesoS(p.exp))}</b></span><span class="mr2">${r == null ? '—' : r < 0 ? `<span class="dn">overspent ${esc(pesoS(p.exp - p.inc))}</span>` : r + '% kept'}${ch == null ? '' : ch === 0 ? '<small>same spending</small>' : `<small class="${ch > 0 ? 'dn' : 'up'}">${ch > 0 ? '▲' : '▼'} ${Math.abs(ch)}% spent</small>`}</span></div>`; }).join('')}</div>
+      <p class="muted"><i class="key bi"></i> income · <i class="key be"></i> spent · “kept” = share of income not spent${insTr ? '' : ' · transfers between your accounts left out'}</p></section>
     <section class="card inscard"><h3>Top merchants</h3><p class="muted">${pLabel[0].toUpperCase() + pLabel.slice(1)}, transfers left out</p>
       ${merch.length ? `<ol class="mlist">${merch.map(m => `<li><span>${esc(m.n)}<small>${m.c} time${m.c === 1 ? '' : 's'}</small></span><b>${esc(peso(m.a))}</b></li>`).join('')}</ol>` : '<p class="empty">No merchants yet. They come from descriptions in imported statements and new entries.</p>'}</section>
     <section class="card inscard"><div class="inshead"><h3>Year in review</h3><div class="seg insseg">${ys.map(y => `<button data-act="ins-y" data-y="${esc(y)}" aria-pressed="${y === insYear}">${esc(y)}</button>`).join('')}</div></div>
       ${yr.length ? `<div class="yrgrid">
         <div><span>Earned</span><b class="up">${esc(pesoS(yInc))}</b></div><div><span>Spent</span><b class="dn">${esc(pesoS(yExp))}</b></div>
-        <div><span>Kept</span><b>${esc(pesoS(yInc - yExp))}</b><small>${rate(yInc, yExp) ?? '—'}% of income</small></div><div><span>Saved</span><b>${esc(pesoS(ySav))}</b></div>
+        <div><span>${yInc - yExp < 0 ? 'Overspent' : 'Kept'}</span><b class="${yInc - yExp < 0 ? 'dn' : ''}">${esc(pesoS(Math.abs(yInc - yExp)))}</b><small>${yInc - yExp < 0 ? 'more than you earned' : (rate(yInc, yExp) ?? '—') + '% of income'}</small></div><div><span>Saved</span><b>${esc(pesoS(ySav))}</b></div>
         <div><span>Savings grew</span><b class="up">${potGrow >= 0 ? '+' : '−'}${esc(pesoS(Math.abs(potGrow)))}</b><small>all accounts</small></div><div><span>Avg spent / month</span><b>${esc(pesoS(yExp / yr.length))}</b></div></div>
         <ul class="yrfacts">
           ${big ? `<li>Biggest spending month: <b>${M[big.i]}</b> (${esc(peso(big.exp))})</li>` : ''}
@@ -1669,6 +1704,15 @@ document.addEventListener('click', e => {
     case 'close': return closeSheet();
     case 'ins-p': insP = d.k; store.set('pera:insP', insP); return renderInsights(series());
     case 'ins-y': insYear = d.y; return renderInsights(series());
+    case 'ins-tr': insTr = !insTr; store.set('pera:insTr', insTr); return renderInsights(series());
+    case 'ins-cat': return catSheet(d.c);
+    case 'cat-pick': return catPick(d.m, d.c);
+    case 'cat-set': {
+      const rules = S.meta.catRules = {...(S.meta.catRules || {})}, old = rules[d.m];
+      if (d.c) rules[d.m] = d.c; else delete rules[d.m];
+      commit('meta'); closeSheet();
+      toast(d.c ? `${d.m} → ${d.c}` : `${d.m} sorted automatically`, () => { if (old) rules[d.m] = old; else delete rules[d.m]; commit('meta'); }); return;
+    }
     case 'lock-toggle': { if (lockState) { disableLock(); settings(); } else enableLock().then(() => settings()); return; }
     case 'eye': hideTotal = !hideTotal; store.set('pera:hideTotal', hideTotal); render(); return;
     case 'fab': closeSheet(); return entryForm({});

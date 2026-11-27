@@ -283,3 +283,9 @@ html.applock #mainView,html.applock .tabs,html.applock .sheet,html.applock .toas
 #homeList:empty{display:none}
 @media (min-width:900px){.homecols{grid-template-columns:minmax(0,1fr)}.homecols .fig{height:320px}#v-home .trio{max-width:720px}}
 @media (max-width:899px){#insights>.inshead .insseg{width:100%}#insights>.inshead .insseg button{flex:1 1 0;padding:0 4px;font-size:13px}}
+
+.catrows .cr{width:100%;text-align:left;border-radius:10px;min-height:44px}
+.catrows .cr:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}
+.trchip{min-height:32px;font-size:13px;padding:0 12px}.trchip[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:var(--on-blue)}
+.catpick{flex-wrap:wrap;margin:12px 0}.catpick .chip[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:var(--on-blue);font-weight:600}
+.rowbtn[disabled]{opacity:1;cursor:default}
