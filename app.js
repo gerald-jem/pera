@@ -714,7 +714,7 @@ $('authForm').addEventListener('submit', async e => {
   if (!email || password.length < 6) { $('authErr').textContent = 'Enter your email and a password of at least 6 characters.'; return; }
   $('authGo').disabled = true; $('authErr').textContent = '';
   try {
-    const r = signUpMode ? await sb.auth.signUp({email, password}) : await sb.auth.signInWithPassword({email, password});
+    const r = signUpMode ? await sb.auth.signUp({email, password, options: {emailRedirectTo: location.origin + location.pathname}}) : await sb.auth.signInWithPassword({email, password});
     if (r.error) throw r.error;
     if (signUpMode && !r.data.session) $('authErr').textContent = 'Check your email to confirm, then come back and sign in.';
   } catch (err) { $('authErr').textContent = err.message || 'Something went wrong.'; }
