@@ -1,6 +1,6 @@
 // Pera service worker: network first, cache as the offline fallback.
 // Bump VERSION whenever app files change.
-const VERSION = 'pera-v34';
+const VERSION = 'pera-v35';
 const SHELL = ['./', 'index.html', 'style.css?v=34', 'app.js?v=34', 'config.js?v=34', 'vendor/supabase.js',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 

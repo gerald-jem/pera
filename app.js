@@ -210,7 +210,7 @@ function renderHome(ser) {
     $('homeLbl').textContent = 'Total money';
     $('homeTotal').textContent = '₱0';
     $('homeChg').textContent = '';
-    $('homeTrio').innerHTML = '';
+    ['hMonth', 'hBills', 'hNotes'].forEach(id => { $(id).hidden = true; });
     $('homeMonthLink').hidden = true;
     $('homeList').innerHTML = `<li><button class="rowbtn" data-act="settings"><span class="dot s">⇪</span><span class="t">Import your backup<small>Load pera-backup.json from Settings</small></span></button></li>
       <li><button class="rowbtn" data-act="statement"><span class="dot s">⇩</span><span class="t">Import a bank statement<small>Excel, PDF or CSV</small></span></button></li>
@@ -224,12 +224,72 @@ function renderHome(ser) {
   const prev = ser[ser.indexOf(cur) - 1];
   if (prev) { const d = cur.total - prev.total; $('homeChg').innerHTML = `<span class="${d >= 0 ? 'up' : 'dn'}">${d >= 0 ? '▲' : '▼'} ${esc(peso(Math.abs(d)))}</span> vs ${esc(M[prev.i])}`; }
   else $('homeChg').textContent = '';
-  $('homeTrio').innerHTML = [['Income', cur.inc, 'up'], ['Spent', cur.exp, 'dn'], ['Saved', cur.sav, '']]
-    .map(([l, v, c]) => `<div class="tile"><span>${l}</span><b class="${c}">${esc(peso(v))}</b></div>`).join('');
+  homeMonth(cur, prev); homeBills(); homeNotes(cur, ser);
   $('homeList').innerHTML = '';
   const ml = $('homeMonthLink'); ml.hidden = false; ml.dataset.y = cur.y; ml.dataset.i = cur.i;
-  ml.textContent = `See ${M[cur.i]}’s entries →`;
+  ml.textContent = `See all of ${M[cur.i]}’s entries →`;
   drawChart();
+}
+/* ---- Home cards: the few numbers people check every day ---- */
+const dayOf = (x, y, i) => { if (!x.d) return 1; const dt = new Date(dnum(x.d)); return dt.getFullYear() === +y && dt.getMonth() === i ? dt.getDate() : 1; };
+function spentByDay(y, i, day) {   // spending in a month up to a day of that month (undated entries and bills count from day 1)
+  const m = S.years[y] && S.years[y][i]; if (!m) return 0;
+  return m.exp.filter(x => dayOf(x, y, i) <= day).reduce((s, x) => s + +x.a, 0) + sum(billsIn(y, i)) + (+m.sav || 0);
+}
+function homeMonth(cur, prev) {
+  const box = $('hMonth'), t = today(), isNow = cur.now;
+  const days = new Date(+cur.y, cur.i + 1, 0).getDate(), day = isNow ? t.getDate() : days;
+  const out = cur.exp + cur.manual, left = cur.inc - out, over = left < 0;
+  const pct = cur.inc > 0 ? Math.min(100, out / cur.inc * 100) : (out > 0 ? 100 : 0);
+  let pace = '';
+  if (prev && isNow && S.years[prev.y]) {
+    const lastBy = spentByDay(prev.y, prev.i, day), nowBy = spentByDay(cur.y, cur.i, day), diff = nowBy - lastBy;
+    if (lastBy > 0 || nowBy > 0) pace = Math.abs(diff) < 1 ? `Spending the same as ${M[prev.i]} by this day`
+      : `<span class="${diff > 0 ? 'dn' : 'up'}">${diff > 0 ? '▲' : '▼'} ${esc(pesoS(Math.abs(diff)))} ${diff > 0 ? 'more' : 'less'}</span> than ${M[prev.i]} by day ${day}`;
+  }
+  const tick = isNow && cur.inc > 0 ? Math.min(100, day / days * 100) : null;
+  box.hidden = false;
+  box.innerHTML = `<div class="hhead"><h3>${isNow ? 'This month' : M[cur.i] + ' ' + cur.y}</h3>${isNow ? `<span class="muted">Day ${day} of ${days}</span>` : ''}</div>
+    <div class="leftnum"><b class="${over ? 'dn' : ''}">${esc(peso(Math.abs(left)))}</b><span>${over ? 'more went out than came in' : cur.inc ? 'left after spending and saving' : 'no income added yet'}</span></div>
+    <div class="pbar${over ? ' over' : ''}" role="img" aria-label="${Math.round(pct)}% of income used"><b style="width:${pct.toFixed(1)}%"></b>${tick != null ? `<i style="left:${tick.toFixed(1)}%" title="Even pace for day ${day}"></i>` : ''}</div>
+    <div class="pmeta"><span>${cur.inc ? Math.round(out / cur.inc * 100) + '% of income used' : ''}</span>${tick != null ? '<span class="muted">┆ even pace</span>' : ''}</div>
+    ${pace ? `<p class="pace">${pace}</p>` : ''}
+    <div class="mini"><button data-act="goto-month" data-y="${esc(cur.y)}" data-i="${cur.i}"><span>In</span><b class="up">${esc(pesoS(cur.inc))}</b></button><button data-act="goto-month" data-y="${esc(cur.y)}" data-i="${cur.i}"><span>Spent</span><b class="dn">${esc(pesoS(cur.exp))}</b></button><button data-act="go-view" data-v="savings"><span>Saved</span><b>${esc(pesoS(cur.sav))}</b></button></div>`;
+}
+function homeBills() {
+  const box = $('hBills'), t0 = todayIso(), from = iso(new Date(today().getFullYear(), today().getMonth(), today().getDate() - 30)), lim = iso(new Date(today().getFullYear(), today().getMonth(), today().getDate() + 35));
+  const list = (S.meta.bills || []).map((b, j) => ({...b, j})).filter(b => !b.paid && b.due && b.due >= from && b.due <= lim).sort((a, b) => a.due < b.due ? -1 : 1);
+  const late = list.filter(b => b.due < t0), soon = list.filter(b => b.due >= t0), show = [...late, ...soon].slice(0, 5);
+  if (!list.length) { box.hidden = !(S.meta.bills || []).length; box.innerHTML = `<div class="hhead"><h3>Coming up</h3><button class="plain" data-act="go-view" data-v="bills">Bills →</button></div><p class="muted">No unpaid bills in the next 5 weeks.</p>`; return; }
+  const total = list.reduce((s, b) => s + +b.a, 0), dd = d => { const n = Math.round((new Date(dnum(d)) - new Date(dnum(t0))) / 864e5); return n < 0 ? `<span class="dn">${-n} day${n === -1 ? '' : 's'} late</span>` : n === 0 ? '<span class="dn">due today</span>' : n === 1 ? 'tomorrow' : `in ${n} days`; };
+  box.hidden = false;
+  box.innerHTML = `<div class="hhead"><h3>Coming up</h3><button class="plain" data-act="go-view" data-v="bills">All bills →</button></div>
+    <p class="muted">${esc(peso(total))} due in the next 5 weeks${late.length ? ` · ${late.length} past due` : ''}</p>
+    <ul class="blist">${show.map(b => `<li><span class="bd"><b>${esc(fmtDate(b.due, {day: 'numeric'}))}</b><small>${esc(fmtDate(b.due, {month: 'short'}))}</small></span><span class="bn">${esc(b.name)}<small>${dd(b.due)}</small></span><span class="ba">${esc(peso(+b.a, 2))}</span><button class="paybtn" data-act="bill-pay" data-j="${b.j}" aria-label="Mark ${esc(b.name)} due ${esc(fmtDate(b.due))} as paid">Paid</button></li>`).join('')}</ul>
+    ${list.length > show.length ? `<p class="muted">+ ${list.length - show.length} more</p>` : ''}`;
+}
+function homeNotes(cur, ser) {
+  const box = $('hNotes'), notes = [], t = today();
+  // 1. a category running well above its usual level
+  const prevM = []; for (let k = 1; k <= 3; k++) { const d = new Date(+cur.y, cur.i - k, 1); if (S.years[d.getFullYear()]) prevM.push({y: String(d.getFullYear()), i: d.getMonth()}); }
+  if (prevM.length) {
+    const byNow = {}, byPrev = {};
+    spendingIn([{y: cur.y, i: cur.i}]).forEach(r => { if (r.cat !== 'Transfers' && r.cat !== 'No description') byNow[r.cat] = (byNow[r.cat] || 0) + r.a; });
+    spendingIn(prevM).forEach(r => { if (r.cat !== 'Transfers' && r.cat !== 'No description') byPrev[r.cat] = (byPrev[r.cat] || 0) + r.a / prevM.length; });
+    const up = Object.entries(byNow).map(([c, v]) => ({c, v, avg: byPrev[c] || 0, d: v - (byPrev[c] || 0)})).filter(x => x.d > 1000 && x.v > x.avg * 1.3).sort((a, b) => b.d - a.d)[0];
+    if (up) notes.push({ic: '▲', cls: 'dn', act: `data-act="nudge-cat" data-c="${esc(up.c)}"`, h: `<b>${esc(up.c)}</b> is ${esc(pesoS(up.d))} above your usual`, s: `${esc(peso(up.v))} this month vs ${esc(peso(up.avg))} a month on average`});
+    const down = Object.entries(byPrev).map(([c, avg]) => ({c, avg, v: byNow[c] || 0, d: avg - (byNow[c] || 0)})).filter(x => cur.now && t.getDate() >= 20 && x.d > 1500 && x.v < x.avg * 0.6).sort((a, b) => b.d - a.d)[0];
+    if (down) notes.push({ic: '▼', cls: 'up', act: `data-act="nudge-cat" data-c="${esc(down.c)}"`, h: `Less on <b>${esc(down.c)}</b> than usual`, s: `${esc(peso(down.v))} so far vs ${esc(peso(down.avg))} a month on average`});
+  }
+  // 2. bills already sitting in next month
+  const nd = new Date(+cur.y, cur.i + 1, 1), ny = String(nd.getFullYear()), ni = nd.getMonth();
+  const nb = S.years[ny] ? billsIn(ny, ni) : [], nbt = nb.reduce((s, b) => s + +b.a, 0);
+  if (nbt > 0) notes.push({ic: '⏷', cls: '', act: `data-act="goto-month" data-y="${ny}" data-i="${ni}"`, h: `${esc(peso(nbt))} of bills already counted for ${M[ni]}`, s: `${nb.length} payment${nb.length === 1 ? '' : 's'} · plan next month’s spending around it`});
+  // 3. spending without a note can't be sorted
+  const rows = spendingIn([{y: cur.y, i: cur.i}]), nod = rows.filter(r => r.cat === 'No description').reduce((s, r) => s + r.a, 0), all = rows.reduce((s, r) => s + r.a, 0);
+  if (all > 0 && nod / all > 0.25) notes.push({ic: '✎', cls: '', act: `data-act="goto-month" data-y="${esc(cur.y)}" data-i="${cur.i}"`, h: `${Math.round(nod / all * 100)}% of this month’s spending has no note`, s: 'Add a short note so Insights can sort it'});
+  box.hidden = !notes.length;
+  box.innerHTML = `<div class="hhead"><h3>Worth a look</h3></div><ul class="nlist">${notes.slice(0, 3).map(n => `<li><button ${n.act}><span class="ni ${n.cls}">${n.ic}</span><span class="nt">${n.h}<small>${n.s}</small></span><span class="chev">›</span></button></li>`).join('')}</ul>`;
 }
 function setEye() {
   const b = $('eyeBtn'); b.setAttribute('aria-pressed', hideTotal); b.setAttribute('aria-label', hideTotal ? 'Show total money' : 'Hide total money');
@@ -1775,6 +1835,8 @@ document.addEventListener('click', e => {
     case 'ins-y': insYear = d.y; return renderInsights(series());
     case 'ins-tr': insTr = !insTr; store.set('pera:insTr', insTr); return renderInsights(series());
     case 'ins-cat': return catSheet(d.c);
+    case 'nudge-cat': insP = 'month'; render(); return catSheet(d.c);
+    case 'go-view': showView(d.v); render(); return;
     case 'cat-pick': return catPick(d.m, d.c);
     case 'cat-set': {
       const rules = S.meta.catRules = {...(S.meta.catRules || {})}, old = rules[d.m];

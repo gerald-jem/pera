@@ -289,3 +289,33 @@ html.applock #mainView,html.applock .tabs,html.applock .sheet,html.applock .toas
 .trchip{min-height:32px;font-size:13px;padding:0 12px}.trchip[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:var(--on-blue)}
 .catpick{flex-wrap:wrap;margin:12px 0}.catpick .chip[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:var(--on-blue);font-weight:600}
 .rowbtn[disabled]{opacity:1;cursor:default}
+
+/* Home cards */
+.homegrid{display:grid;gap:12px}
+.hcard{background:var(--card);border-radius:18px;padding:16px}
+.hcard.hero{background:none;padding:0}
+.hhead{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.hhead h3{margin:0;font-size:16px}.hhead .plain{width:auto;margin:0;padding:0;min-height:0;font-size:14px}
+.leftnum{margin:10px 0 10px}.leftnum b{display:block;font-family:Literata,Georgia,serif;font-size:30px;line-height:1.1;font-weight:600}.leftnum span{color:var(--mute);font-size:14px}
+.pbar{position:relative;height:10px;border-radius:6px;background:color-mix(in srgb,var(--mute) 18%,transparent)}
+.pbar>b{position:absolute;inset:0 auto 0 0;border-radius:6px;background:var(--blue)}.pbar.over>b{background:var(--red)}
+.pbar>i{position:absolute;top:-4px;bottom:-4px;width:0;border-left:2px dashed var(--ink);opacity:.55}
+.pmeta{display:flex;justify-content:space-between;font-size:13px;margin-top:6px}
+.pace{margin:10px 0 0;font-size:14px}
+.mini{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px}
+.mini button{all:unset;cursor:pointer;background:var(--bg);border-radius:12px;padding:10px;min-height:44px;box-sizing:border-box}.mini button:focus-visible{outline:2px solid var(--blue)}
+.mini span{display:block;font-size:12px;color:var(--mute)}.mini b{display:block;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.blist,.nlist{list-style:none;margin:8px 0 0;padding:0}
+.blist li{display:grid;grid-template-columns:40px minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}.blist li:first-child{border-top:0}
+.bd{text-align:center;line-height:1.05}.bd b{display:block;font-size:18px}.bd small{font-size:11px;color:var(--mute);text-transform:uppercase}
+.bn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bn small{display:block;font-size:12px;color:var(--mute)}
+.ba{font-variant-numeric:tabular-nums;font-size:14px}
+.paybtn{min-height:36px;padding:0 12px;border-radius:18px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:13px}
+.nlist li+li{border-top:1px solid var(--line)}
+.nlist button{all:unset;cursor:pointer;display:grid;grid-template-columns:28px minmax(0,1fr) 12px;gap:10px;align-items:center;width:100%;padding:10px 0;box-sizing:border-box}.nlist button:focus-visible{outline:2px solid var(--blue)}
+.ni{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--bg);font-size:13px}
+.nt{font-size:14px}.nt small{display:block;color:var(--mute);font-size:12px;margin-top:2px}.chev{color:var(--mute)}
+@media (min-width:900px){
+  .homegrid{grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);grid-template-areas:"hero month" "hero bills" "notes bills";align-items:start;max-width:1180px}
+  .hcard.hero{grid-area:hero;background:var(--card);padding:20px}#hMonth{grid-area:month}#hBills{grid-area:bills}#hNotes{grid-area:notes}
+  .homegrid .fig{height:300px}
+}
