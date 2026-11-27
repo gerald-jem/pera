@@ -45,10 +45,53 @@ function blank() { return {meta: {years: [], bills: [], accounts: [], maya: null
 const TRASH_DAYS = 30;
 const kData = () => 'pera:data:' + user.id;
 const kDirty = () => 'pera:dirty:' + user.id;
-function saveLocal() { store.set(kData(), S); store.set(kDirty(), [...dirty]); }
+const kBase = () => 'pera:base:' + user.id;      // last copy agreed with the server, per doc
+const kSnaps = () => 'pera:snaps:' + user.id;    // safety copies kept on this device
+let base = {};
+function saveLocal() { store.set(kData(), S); store.set(kDirty(), [...dirty]); store.set(kBase(), base); }
 function loadLocal() {
   const d = store.get(kData()); S = d && d.meta ? d : blank();
   dirty = new Set(store.get(kDirty()) || []);
+  base = store.get(kBase()) || {};
+}
+/* ---- three-way merge: keep what this device changed, take everything else from the server ---- */
+const J = x => JSON.stringify(x === undefined ? null : x);
+function pick(b, l, r, hasBase) {
+  // changed here since the last sync → ours; otherwise the server's (fall back to ours if the server has nothing)
+  if (hasBase && J(l) !== J(b)) return l;
+  return r !== undefined ? r : l;
+}
+function mergeById(b, l, r, hasBase) {           // arrays of objects with ids (savings accounts)
+  if (!Array.isArray(l) || !Array.isArray(r)) return pick(b, l, r, hasBase);
+  const bm = new Map((b || []).map(x => [x.id, x])), lm = new Map(l.map(x => [x.id, x])), rm = new Map(r.map(x => [x.id, x])), out = [];
+  const ids = [...new Set([...r.map(x => x.id), ...l.map(x => x.id)])];
+  for (const id of ids) {
+    const bx = bm.get(id), lx = lm.get(id), rx = rm.get(id);
+    if (lx && rx) out.push(hasBase && J(lx) !== J(bx) ? lx : rx);
+    else if (lx && !rx) { if (!hasBase || !bx || J(lx) !== J(bx)) out.push(lx); }      // new here, or server deleted something we didn't touch
+    else if (rx && !lx) { if (!hasBase || !bx || J(rx) !== J(bx)) out.push(rx); }      // new on server, or we deleted it
+  }
+  return out;
+}
+function merge3(key, b, l, r) {
+  const hasBase = b !== undefined && b !== null;
+  if (r === undefined || r === null) return l;
+  if (key === 'meta') {
+    const out = {};
+    for (const f of new Set([...Object.keys(l || {}), ...Object.keys(r || {})])) {
+      out[f] = f === 'savings' ? mergeById(hasBase ? b[f] : undefined, l[f], r[f], hasBase && b[f] !== undefined) : pick(hasBase ? b[f] : undefined, l[f], r[f], hasBase);
+      if (out[f] === undefined) delete out[f];
+    }
+    return out;
+  }
+  const lm = (l && l.months) || [], rm = (r && r.months) || [], bm = hasBase ? (b.months || []) : [];
+  return {months: M.map((_, i) => pick(bm[i], lm[i], rm[i], hasBase) || {inc: [], exp: [], sav: 0})};
+}
+function snapshot(reason) {
+  const list = store.get(kSnaps()) || [], last = list[0];
+  if (last && Date.now() - last.at < 3 * 3600e3 && reason !== 'force') return;   // at most one every 3 hours
+  list.unshift({at: Date.now(), reason, data: JSON.parse(JSON.stringify(S))});
+  store.set(kSnaps(), list.slice(0, 6));
 }
 function docOf(key) { return key === 'meta' ? S.meta : {months: S.years[key.slice(1)]}; }
 function applyDoc(key, data) {
@@ -70,44 +113,60 @@ function commit(...keys) { keys.forEach(k => dirty.add(k)); saveLocal(); render(
 
 /* ================= sync ================= */
 async function pull() {
-  if (!sb || !user) return;
+  if (!sb || !user) return false;
   const {data, error} = await sb.from('pera_docs').select('key,data');
-  if (error) { setSync(navigator.onLine ? 'error' : 'offline'); return; }
-  for (const row of data) if (!dirty.has(row.key)) applyDoc(row.key, row.data);
-  // a year that is no longer on the server (deleted on another device) goes here too
-  if (data.length) {
-    const remote = new Set(data.map(r => r.key));
-    for (const y of Object.keys(S.years)) if (!remote.has('y' + y) && !dirty.has('y' + y)) delete S.years[y];
+  if (error) { setSync(navigator.onLine ? 'error' : 'offline'); return false; }
+  const remote = new Map(data.map(r => [r.key, r.data]));
+  // keep a safety copy before the server's version replaces anything on this device
+  const changes = [...remote].some(([k, v]) => !dirty.has(k) && J(v) !== J(k === 'meta' ? S.meta : (S.years[k.slice(1)] ? {months: S.years[k.slice(1)]} : null)));
+  if (changes && (Object.keys(S.years).length || (S.meta.savings || []).length)) snapshot('before sync');
+  for (const [k, v] of remote) {
+    if (dirty.has(k)) continue;                     // our edits get merged on the next upload
+    applyDoc(k, JSON.parse(J(v))); base[k] = JSON.parse(J(v));   // separate copies: edits must never touch the base
+  }
+  if (data.length) {   // a year deleted on another device
+    for (const y of Object.keys(S.years)) if (!remote.has('y' + y) && !dirty.has('y' + y) && base['y' + y] !== undefined) { delete S.years[y]; delete base['y' + y]; }
   }
   S.meta.years = Object.keys(S.years).sort();
-  if (migrateSavings()) dirty.add('meta');
-  if (unifyBillNames()) dirty.add('meta');
   saveLocal(); render();
+  return true;
 }
 async function push() {
   if (!sb || !user || pushing) return;
   if (!dirty.size) { setSync('idle'); return; }
   pushing = true; setSync('saving');
   try {
-    while (dirty.size) {
+    for (let round = 0; dirty.size && round < 5; round++) {
       const keys = [...dirty];
-      const gone = keys.filter(k => k !== 'meta' && !S.years[k.slice(1)]);   // deleted years
-      const live = keys.filter(k => !gone.includes(k));
-      const snapshot = keys.map(k => JSON.stringify(gone.includes(k) ? null : docOf(k)));
-      if (gone.length) {
-        const {error} = await sb.from('pera_docs').delete().eq('user_id', user.id).in('key', gone);
-        if (error) throw error;
+      // 1. read what the server has now
+      const {data, error} = await sb.from('pera_docs').select('key,data').in('key', keys);
+      if (error) throw error;
+      const remote = new Map(data.map(r => [r.key, r.data]));
+      // 2. merge with this device's changes (no awaits here, so nothing can change in between)
+      const gone = [], rows = [], sent = {};
+      for (const k of keys) {
+        const local = k === 'meta' ? S.meta : (S.years[k.slice(1)] ? {months: S.years[k.slice(1)]} : null);
+        if (local === null) { gone.push(k); continue; }
+        const merged = merge3(k, base[k], JSON.parse(JSON.stringify(local)), remote.get(k));
+        applyDoc(k, JSON.parse(J(merged)));
+        rows.push({user_id: user.id, key: k, data: merged, updated_at: new Date().toISOString()});
+        sent[k] = J(merged);
       }
-      if (live.length) {
-        const rows = live.map(key => ({user_id: user.id, key, data: docOf(key), updated_at: new Date().toISOString()}));
-        const {error} = await sb.from('pera_docs').upsert(rows, {onConflict: 'user_id,key'});
-        if (error) throw error;
+      if (rows.length) S.meta.years = Object.keys(S.years).sort();
+      saveLocal(); render();
+      // 3. upload the merged result
+      if (gone.length) { const {error: e2} = await sb.from('pera_docs').delete().eq('user_id', user.id).in('key', gone); if (e2) throw e2; }
+      if (rows.length) { const {error: e3} = await sb.from('pera_docs').upsert(rows, {onConflict: 'user_id,key'}); if (e3) throw e3; }
+      // 4. done for keys that didn't change again while uploading
+      for (const k of keys) {
+        if (gone.includes(k)) { if (!S.years[k.slice(1)]) { dirty.delete(k); delete base[k]; } continue; }
+        const now = J(k === 'meta' ? S.meta : {months: S.years[k.slice(1)]});
+        base[k] = JSON.parse(sent[k]);
+        if (now === sent[k]) dirty.delete(k);
       }
-      // only clear keys that did not change again while uploading
-      keys.forEach((k, i) => { const now = k !== 'meta' && !S.years[k.slice(1)] ? null : docOf(k); if (JSON.stringify(now) === snapshot[i]) dirty.delete(k); });
-      store.set(kDirty(), [...dirty]);
+      saveLocal();
     }
-    setSync('idle');
+    setSync(dirty.size ? 'error' : 'idle');
   } catch (e) {
     console.warn('sync failed', e);
     setSync(navigator.onLine ? 'error' : 'offline');
@@ -121,7 +180,7 @@ function setSync(s) {
     : s === 'offline' ? `Offline · ${n} change${n === 1 ? '' : 's'} waiting` : 'Not synced · tap Settings';
 }
 addEventListener('online', () => push());
-document.addEventListener('visibilitychange', () => { if (!document.hidden && user) { push().then(pull); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && user) { pull().then(() => push()); } });
 setInterval(() => { if (dirty.size && navigator.onLine) push(); }, 30000);
 
 /* ================= maths ================= */
@@ -1202,6 +1261,8 @@ function settings() {
     <p class="muted">Excel, PDF or CSV from your bank, GCash or Maya, including password-locked ones.</p>
     <h2>Recycle bin</h2>
     ${binHTML()}
+    <h2>Copies on this device</h2>
+    ${(() => { const sn = store.get(kSnaps()) || []; return sn.length ? `<p class="muted">Pera keeps a copy here before syncing replaces anything. Restoring brings that copy back and syncs it to your other devices.</p><ul class="list">${sn.map((x, i) => { const sv = (x.data.meta.savings || []).map(p => p.name).join(', '); return `<li><span class="rowbtn" style="cursor:default"><span class="t">${esc(new Date(x.at).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}))}<small>${Object.keys(x.data.years).sort().join(', ') || 'no years'}${sv ? ' · savings: ' + esc(sv) : ' · no savings'} · ${(x.data.meta.bills || []).length} bills</small></span></span><button class="ghost" data-act="snap-restore" data-k="${i}">Restore</button></li>`; }).join('')}</ul>` : '<p class="muted">None yet. Pera saves one here before syncing replaces anything.</p>'; })()}
     <h2>Backup</h2>
     <label class="go filebtn" style="color:var(--on-blue);margin:0">Import or restore from backup (.json)<input type="file" id="importFile" accept=".json,application/json"></label>
     <button class="plain" data-act="export">Export backup</button>
@@ -1702,6 +1763,14 @@ document.addEventListener('click', e => {
   const d = el.dataset, j = d.j;
   switch (d.act) {
     case 'close': return closeSheet();
+    case 'snap-restore': {
+      const sn = (store.get(kSnaps()) || [])[+d.k]; if (!sn) return;
+      snapshot('force');                                   // keep what we have now too
+      const before = JSON.parse(JSON.stringify(S)), oldYears = Object.keys(S.years);
+      S = JSON.parse(JSON.stringify(sn.data));
+      closeSheet(); commit('meta', ...Object.keys(S.years).map(y => 'y' + y), ...oldYears.filter(y => !S.years[y]).map(y => 'y' + y));
+      toast('Copy restored', () => { S = before; commit('meta', ...Object.keys(S.years).map(y => 'y' + y)); }); return;
+    }
     case 'ins-p': insP = d.k; store.set('pera:insP', insP); return renderInsights(series());
     case 'ins-y': insYear = d.y; return renderInsights(series());
     case 'ins-tr': insTr = !insTr; store.set('pera:insTr', insTr); return renderInsights(series());
@@ -1768,7 +1837,7 @@ document.addEventListener('click', e => {
     case 'bill-del': return removeBill(+j);
     case 'bill-add': return billForm(null);
     case 'qb-name': { const q = $('qb'); q.value = d.n + ' '; q.focus(); quickPreview(); return; }
-    case 'sync-now': push().then(pull).then(() => { closeSheet(); toast(dirty.size ? 'Still offline — will retry' : 'Synced'); }); return;
+    case 'sync-now': pull().then(() => push()).then(() => { closeSheet(); toast(dirty.size ? 'Still offline — will retry' : 'Synced'); }); return;
     case 'export': return exportData();
     case 'signout': closeSheet(); return sb.auth.signOut();
   }
@@ -1877,8 +1946,11 @@ $('authForm').addEventListener('submit', async e => {
 
 async function start(u) {
   if (user && user.id === u.id) return;
-  user = u; if (lockState) showLock(); loadLocal(); purgeTrash(); purgeCycleTrash(); if (unifyBillNames()) { dirty.add('meta'); saveLocal(); } if (migrateSavings()) { dirty.add('meta'); saveLocal(); } showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
-  await push(); await pull();
+  user = u; if (lockState) showLock(); loadLocal(); showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
+  // download first; tidy-ups only run on fresh data, so an old copy can never overwrite newer changes
+  const fresh = await pull();
+  if (fresh) { purgeTrash(); purgeCycleTrash(); if (unifyBillNames()) dirty.add('meta'); if (migrateSavings()) dirty.add('meta'); saveLocal(); render(); }
+  await push();
 }
 function stop(msg) { hideToast(); locked = false; $('lockScreen').hidden = true; document.documentElement.classList.remove('applock'); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
 
