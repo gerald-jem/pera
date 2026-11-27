@@ -137,6 +137,7 @@ input.bad{border-color:var(--red)}
 
 .qhead{display:flex;justify-content:space-between;align-items:center;min-height:44px}.qhead b{font-size:16px}
 .quick input,.quick select{background:var(--bg)}
+select{background-image:linear-gradient(45deg,transparent 50%,var(--mute) 50%),linear-gradient(135deg,var(--mute) 50%,transparent 50%);background-position:calc(100% - 17px) 21px,calc(100% - 12px) 21px;background-size:5px 5px;background-repeat:no-repeat;padding-right:28px}
 .quick select{background-image:linear-gradient(45deg,transparent 50%,var(--mute) 50%),linear-gradient(135deg,var(--mute) 50%,transparent 50%);background-position:calc(100% - 17px) 21px,calc(100% - 12px) 21px;background-size:5px 5px;background-repeat:no-repeat;padding-right:28px}
 .three{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.8fr) minmax(0,1.1fr);gap:8px}
 .quick .go{margin-top:12px}.quick .go:disabled{opacity:.4}
@@ -170,3 +171,16 @@ input.bad{border-color:var(--red)}
   .toast.on{transform:none}
 }
 @media(prefers-reduced-motion:reduce){.toast{transition:opacity .2s!important}.toast .bar{display:none}}
+
+/* ===== statement import ===== */
+textarea{width:100%;font:15px/1.4 Inter,system-ui,sans-serif;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;resize:vertical}
+.imptools{display:flex;gap:4px;margin:4px 0}
+.implist{max-height:52vh;overflow-y:auto;margin:0 -4px;padding:0 4px}
+.implist li{gap:4px;min-height:56px}
+.implist .t{flex:1;padding:8px 0;font-size:15px;line-height:1.3}.implist .t small{display:block;color:var(--mute);font-size:12px}
+.implist li.off .t{opacity:.45}
+.dirbtn{flex:none;min-height:36px;padding:0 10px;border-radius:10px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:14px}
+.dirbtn.inc{color:var(--blue);background:color-mix(in srgb,var(--blue) 12%,transparent)}
+.dirbtn.exp{color:var(--red);background:color-mix(in srgb,var(--red) 10%,transparent)}
+.implist li.off .dirbtn{opacity:.45}
+@media (min-width:900px){.sheet:has(.implist){width:min(640px,92vw)}}

@@ -149,6 +149,7 @@ function renderHome(ser) {
     $('homeTrio').innerHTML = '';
     $('homeListH').textContent = 'Get started';
     $('homeList').innerHTML = `<li><button class="rowbtn" data-act="settings"><span class="dot s">⇪</span><span class="t">Import your backup<small>Load pera-backup.json from Settings</small></span></button></li>
+      <li><button class="rowbtn" data-act="statement"><span class="dot s">⇩</span><span class="t">Import a bank statement<small>Excel, PDF or CSV</small></span></button></li>
       <li><button class="rowbtn" data-act="fab"><span class="dot i">+</span><span class="t">Or start fresh<small>Add your first income or expense</small></span></button></li>`;
     drawChart(); return;
   }
@@ -170,7 +171,7 @@ function entryRows(y, i) {
     const inc = t === 'inc';
     return `<li><button class="rowbtn" data-act="edit-entry" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}">
       <span class="dot ${inc ? 'i' : 'e'}">${inc ? '↓' : '↑'}</span>
-      <span class="t">${esc(x.n || (inc ? 'Income' : 'Expense'))}<small>${inc ? 'Received' : x.a < 0 ? 'Refund / adjustment' : 'Sent'}</small></span>
+      <span class="t">${esc(x.n || (inc ? 'Income' : 'Expense'))}<small>${inc ? 'Received' : x.a < 0 ? 'Refund / adjustment' : 'Sent'}${x.d ? ' · ' + esc(fmtDate(x.d, {month: 'short', day: 'numeric'})) : ''}</small></span>
       <span class="amt ${inc ? 'up' : ''}">${inc ? '+' : x.a < 0 ? '+' : '−'}${esc(peso(Math.abs(x.a), 2))}</span></button>
       <button class="x" data-act="entry-del" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}" aria-label="Delete ${esc(x.n || (inc ? 'income' : 'expense'))}">×</button></li>`;
   }).join('');
@@ -214,6 +215,7 @@ function renderMonths(ser) {
     || '<li class="empty">No months yet. Tap ＋ Year.</li>';
   const binN = (S.meta.trash || []).length;
   $('yearActions').innerHTML = (rows.length ? `<button class="danger" data-act="year-del" data-y="${esc(selYear)}">Delete ${esc(selYear)}</button>` : '')
+    + `<button class="plain" data-act="statement">Import a bank statement</button>`
     + (binN ? `<button class="plain" data-act="settings">Recycle bin (${binN})</button>` : '');
   $('yearFoot').textContent = rows.length ? `${selYear}: income ${peso(rows.reduce((a, p) => a + p.inc, 0))}, spent ${peso(rows.reduce((a, p) => a + p.exp, 0))}, saved ${peso(rows.reduce((a, p) => a + p.sav, 0))}.` : '';
 }
@@ -573,6 +575,9 @@ function settings() {
     <p class="muted">Signed in as <b style="color:var(--ink)">${esc(user && user.email)}</b></p>
     <div class="note">${syncState === 'idle' ? 'Everything is synced.' : `${n} change${n === 1 ? '' : 's'} saved on this phone, waiting to upload.`}</div>
     <button class="go" data-act="sync-now">Sync now</button>
+    <h2>Bank statements</h2>
+    <button class="go" data-act="statement">Import a bank statement</button>
+    <p class="muted">Excel, PDF or CSV from your bank, GCash or Maya, including password-locked ones.</p>
     <h2>Recycle bin</h2>
     ${binHTML()}
     <h2>Backup</h2>
@@ -659,6 +664,363 @@ function exportData() {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
+/* ---- Excel (.xlsx), including password-locked files — no libraries, all in the browser ---- */
+const u8 = b => b instanceof Uint8Array ? b : new Uint8Array(b);
+async function inflateRaw(bytes) {
+  const ds = new DecompressionStream('deflate-raw');
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer());
+}
+async function readZip(buf) {
+  const b = u8(buf), dv = new DataView(b.buffer, b.byteOffset, b.byteLength), files = {};
+  let e = b.length - 22; while (e >= 0 && dv.getUint32(e, true) !== 0x06054b50) e--;
+  if (e < 0) throw new Error('This Excel file looks damaged.');
+  let p = dv.getUint32(e + 16, true); const n = dv.getUint16(e + 10, true);
+  for (let k = 0; k < n; k++) {
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lo = dv.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(b.subarray(p + 46, p + 46 + nl));
+    const start = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true);
+    const data = b.subarray(start, start + csize);
+    files[name] = () => method === 0 ? Promise.resolve(data) : inflateRaw(data);
+    p += 46 + nl + xl + cl;
+  }
+  return files;
+}
+async function xlsxToTable(buf) {
+  const z = await readZip(buf), txt = async n => z[n] ? new TextDecoder().decode(await z[n]()) : '';
+  const xml = s => new DOMParser().parseFromString(s, 'application/xml');
+  const shared = [...xml(await txt('xl/sharedStrings.xml')).getElementsByTagName('si')].map(si => [...si.getElementsByTagName('t')].map(t => t.textContent).join(''));
+  // first sheet in the workbook
+  const wb = xml(await txt('xl/workbook.xml')), first = wb.getElementsByTagName('sheet')[0];
+  let target = 'xl/worksheets/sheet1.xml';
+  if (first) {
+    const rid = first.getAttribute('r:id') || first.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+    const rel = [...xml(await txt('xl/_rels/workbook.xml.rels')).getElementsByTagName('Relationship')].find(r => r.getAttribute('Id') === rid);
+    if (rel) { const t = rel.getAttribute('Target'); target = t.startsWith('/') ? t.slice(1) : 'xl/' + t.replace(/^\.\//, ''); }
+  }
+  const col = ref => { let c = 0; for (const ch of ref.replace(/\d+/g, '')) c = c * 26 + ch.charCodeAt(0) - 64; return c - 1; };
+  return [...xml(await txt(target)).getElementsByTagName('row')].map(r => {
+    const out = [];
+    for (const c of r.getElementsByTagName('c')) {
+      const t = c.getAttribute('t'), v = c.getElementsByTagName('v')[0];
+      out[col(c.getAttribute('r') || 'A')] = t === 's' ? shared[+(v && v.textContent)] ?? '' : t === 'inlineStr' ? [...c.getElementsByTagName('t')].map(x => x.textContent).join('') : v ? v.textContent : '';
+    }
+    return Array.from(out, x => x ?? '');
+  });
+}
+// Locked Excel files are an encrypted package inside an OLE "compound file" (MS-OFFCRYPTO agile encryption)
+function readCfb(buf) {
+  const b = u8(buf), dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const ss = 1 << dv.getUint16(0x1E, true), mss = 1 << dv.getUint16(0x20, true), cutoff = dv.getUint32(0x38, true);
+  const sec = n => b.subarray((n + 1) * ss, (n + 2) * ss), u32 = (a, i) => new DataView(a.buffer, a.byteOffset).getUint32(i * 4, true);
+  const fatSecs = [];
+  for (let i = 0; i < 109; i++) { const s = dv.getUint32(0x4C + i * 4, true); if (s < 0xFFFFFFFA) fatSecs.push(s); }
+  for (let d = dv.getUint32(0x44, true), k = dv.getUint32(0x48, true); k-- > 0 && d < 0xFFFFFFFA;) { const s = sec(d); for (let i = 0; i < ss / 4 - 1; i++) { const x = u32(s, i); if (x < 0xFFFFFFFA) fatSecs.push(x); } d = u32(s, ss / 4 - 1); }
+  const fat = []; fatSecs.forEach(f => { const s = sec(f); for (let i = 0; i < ss / 4; i++) fat.push(u32(s, i)); });
+  const chain = (start, table) => { const out = []; for (let x = start, g = 0; x < 0xFFFFFFFA && g < 1e6; x = table[x], g++) out.push(x); return out; };
+  const join = parts => { const o = new Uint8Array(parts.reduce((t, p) => t + p.length, 0)); let k = 0; parts.forEach(p => { o.set(p, k); k += p.length; }); return o; };
+  const dir = join(chain(dv.getUint32(0x30, true), fat).map(sec)), entries = [];
+  for (let o = 0; o + 128 <= dir.length; o += 128) {
+    const d = new DataView(dir.buffer, dir.byteOffset + o, 128), nl = d.getUint16(0x40, true);
+    entries.push({name: new TextDecoder('utf-16le').decode(dir.subarray(o, o + Math.max(0, nl - 2))), type: dir[o + 0x42], start: d.getUint32(0x74, true), size: d.getUint32(0x78, true)});
+  }
+  const root = entries.find(e => e.type === 5), miniFat = [];
+  chain(dv.getUint32(0x3C, true), fat).forEach(f => { const s = sec(f); for (let i = 0; i < ss / 4; i++) miniFat.push(u32(s, i)); });
+  const mini = root ? join(chain(root.start, fat).map(sec)) : new Uint8Array();
+  const read = name => {
+    const e = entries.find(x => x.name === name && x.type === 2); if (!e) return null;
+    if (e.size < cutoff) return join(chain(e.start, miniFat).map(n => mini.subarray(n * mss, (n + 1) * mss))).subarray(0, e.size);
+    return join(chain(e.start, fat).map(sec)).subarray(0, e.size);
+  };
+  return {read};
+}
+const HASHES = {SHA1: 'SHA-1', 'SHA-1': 'SHA-1', SHA256: 'SHA-256', 'SHA-256': 'SHA-256', SHA384: 'SHA-384', 'SHA-384': 'SHA-384', SHA512: 'SHA-512', 'SHA-512': 'SHA-512'};
+const cat = (...a) => { const o = new Uint8Array(a.reduce((t, x) => t + x.length, 0)); let k = 0; a.forEach(x => { o.set(x, k); k += x.length; }); return o; };
+const le32 = n => new Uint8Array([n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]);
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function aesCbcNoPad(keyBytes, iv, data) {
+  // WebCrypto insists on PKCS#7 padding, so append one block that decrypts to a full padding block
+  const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-CBC', false, ['encrypt', 'decrypt']);
+  const tail = new Uint8Array(await crypto.subtle.encrypt({name: 'AES-CBC', iv: data.slice(data.length - 16)}, key, new Uint8Array(16).fill(16))).slice(0, 16);
+  return new Uint8Array(await crypto.subtle.decrypt({name: 'AES-CBC', iv}, key, cat(data, tail)));
+}
+async function decryptXlsx(buf, password, onStatus) {
+  const cfb = readCfb(buf), info = cfb.read('EncryptionInfo'), pkg = cfb.read('EncryptedPackage');
+  if (!info || !pkg) throw new Error('This is an old-style .xls file. Open it in Excel or Google Sheets and save it as .xlsx or CSV.');
+  const ver = new DataView(info.buffer, info.byteOffset).getUint16(0, true);
+  if (ver !== 4) throw new Error('This Excel file uses an older lock. Open it in Excel, then save a copy without a password or as CSV.');
+  const doc = new DOMParser().parseFromString(new TextDecoder().decode(info.subarray(8)), 'application/xml');
+  const kd = doc.getElementsByTagName('keyData')[0], ek = [...doc.getElementsByTagName('*')].find(e => e.localName === 'encryptedKey');
+  if (!kd || !ek) throw new Error('This Excel lock type isn’t supported. Save it as CSV and import that.');
+  const hashName = HASHES[ek.getAttribute('hashAlgorithm')] || 'SHA-512', H = d => crypto.subtle.digest(hashName, d).then(r => new Uint8Array(r));
+  const pw = new Uint8Array(password.length * 2); for (let i = 0; i < password.length; i++) { const c = password.charCodeAt(i); pw[i * 2] = c & 255; pw[i * 2 + 1] = c >> 8; }
+  const spin = +ek.getAttribute('spinCount') || 100000, keyBits = +ek.getAttribute('keyBits') || 256;
+  let h = await H(cat(b64(ek.getAttribute('saltValue')), pw));
+  for (let i = 0; i < spin; i++) { h = await H(cat(le32(i), h)); if (onStatus && i % 20000 === 0) onStatus(Math.round(i / spin * 100)); }
+  const fit = (x, n) => x.length >= n ? x.slice(0, n) : cat(x, new Uint8Array(n - x.length).fill(0x36));
+  const keyKey = fit(await H(cat(h, new Uint8Array([0x14, 0x6e, 0x0b, 0xe7, 0xab, 0xac, 0xd0, 0xd6]))), keyBits / 8);
+  let secret;
+  try { secret = (await aesCbcNoPad(keyKey, b64(ek.getAttribute('saltValue')), b64(ek.getAttribute('encryptedKeyValue')))).slice(0, (+kd.getAttribute('keyBits') || 256) / 8); }
+  catch { throw Object.assign(new Error('That password didn’t work.'), {name: 'PasswordException'}); }
+  const size = new DataView(pkg.buffer, pkg.byteOffset).getUint32(0, true), data = pkg.subarray(8), salt = b64(kd.getAttribute('saltValue')), bs = +kd.getAttribute('blockSize') || 16;
+  const kdHash = HASHES[kd.getAttribute('hashAlgorithm')] || 'SHA-512', parts = [];
+  for (let i = 0, o = 0; o < data.length; i++, o += 4096) {
+    const iv = new Uint8Array(await crypto.subtle.digest(kdHash, cat(salt, le32(i)))).slice(0, bs);
+    let seg = data.subarray(o, Math.min(o + 4096, data.length)); if (seg.length % 16) seg = cat(seg, new Uint8Array(16 - seg.length % 16));
+    parts.push(await aesCbcNoPad(secret, iv, seg));
+  }
+  const out = cat(...parts).subarray(0, size);
+  if (out[0] !== 0x50 || out[1] !== 0x4B) throw Object.assign(new Error('That password didn’t work.'), {name: 'PasswordException'});
+  return out;
+}
+
+/* ================= statement import: CSV, PDF, pasted text ================= */
+// Everything runs in the browser. The statement file is never uploaded; only the rows you import are saved.
+const MONTHS3 = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+const AMT_RE = /(?:₱|PHP|Php|P)?\s?-?\(?\d{1,3}(?:,\d{3})*\.\d{2}\)?|(?:₱|PHP|Php|P)\s?-?\d+(?:\.\d{1,2})?/g;
+const OUT_WORDS = /\b(debit|dr|sent|send|payment|paid|pay|purchase|bought|buy|withdraw(?:al)?|cash ?out|transfer(?:red)? to|fee|charge|bills?|load|deduct)\b/i;
+const IN_WORDS = /\b(credit|cr|received|receive|deposit|cash ?in|refund|interest|salary|payroll|transfer(?:red)? from|incoming|reversal|cashback)\b/i;
+
+function toNum(s) {
+  if (s == null) return NaN;
+  s = String(s).trim(); if (!s) return NaN;
+  const neg = /^\(.*\)$/.test(s) || /-/.test(s.replace(/^[^\d-]*/, '').slice(0, 1)) || /^-/.test(s.replace(/[₱P\s]|PHP|Php/g, ''));
+  const n = parseFloat(s.replace(/[^\d.]/g, ''));
+  return isNaN(n) ? NaN : (neg ? -n : n);
+}
+// dates: 2026-11-05 · 11/05/2026 · 05 Nov 2026 · Nov 05, 2026 · Nov 5 · 05-Nov-26
+function parseDateStr(s, fallbackYear) {
+  s = String(s || '').trim(); let m;
+  if (/^\d{5}(\.\d+)?$/.test(s) && +s > 30000 && +s < 80000) { const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(+s) * 864e5); return iso(new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); }
+  const Y = y => !y ? fallbackYear : +y < 100 ? 2000 + +y : +y;
+  const ok = (y, mo, d) => (mo >= 0 && mo < 12 && d >= 1 && d <= 31) ? iso(mkDate(y, mo, d)) : null;
+  if ((m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(s))) return ok(+m[1], +m[2] - 1, +m[3]);
+  if ((m = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\b/.exec(s))) return ok(Y(m[3]), +m[1] - 1, +m[2]);       // PH banks use MM/DD/YYYY
+  if ((m = /^(\d{1,2})[\s-]+([A-Za-z]{3,9})\.?[\s,-]+(\d{2,4})?/.exec(s)) && MONTHS3.includes(m[2].slice(0, 3).toLowerCase())) return ok(Y(m[3]), MONTHS3.indexOf(m[2].slice(0, 3).toLowerCase()), +m[1]);
+  if ((m = /^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})?/.exec(s)) && MONTHS3.includes(m[1].slice(0, 3).toLowerCase())) return ok(Y(m[3]), MONTHS3.indexOf(m[1].slice(0, 3).toLowerCase()), +m[2]);
+  return null;
+}
+const DATE_AT_START = /^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}[\s-]+[A-Za-z]{3,9}\.?(?:[\s,-]+\d{2,4})?|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?)(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AP]M)?)?/i;
+
+/* ---- text lines (PDF / paste) → rows ---- */
+function rowsFromLines(lines) {
+  const yearHint = (lines.join(' ').match(/\b20\d{2}\b/) || [String(today().getFullYear())])[0];
+  const rows = []; let prevBal = null;
+  for (const raw of lines) {
+    const line = raw.replace(/\s+/g, ' ').trim();
+    const dm = DATE_AT_START.exec(line); if (!dm) continue;
+    const date = parseDateStr(dm[1], +yearHint); if (!date) continue;
+    let rest = line.slice(dm[0].length);
+    const amts = [...rest.matchAll(AMT_RE)].map(x => x[0]);
+    if (!amts.length) continue;
+    // with 2+ amounts the last one is usually the running balance
+    const hasBal = amts.length >= 2, amtStr = hasBal ? amts[amts.length - 2] : amts[0], bal = hasBal ? toNum(amts[amts.length - 1]) : null;
+    let a = toNum(amtStr); if (isNaN(a) || a === 0) continue;
+    let dir = null;
+    if (a < 0) dir = 'exp';
+    else if (hasBal && prevBal != null && !isNaN(bal)) dir = Math.abs(prevBal + a - bal) < 0.02 ? 'inc' : Math.abs(prevBal - a - bal) < 0.02 ? 'exp' : null;
+    amts.forEach(x => { rest = rest.replace(x, ' '); });
+    let desc = rest.replace(/\b(PHP|Php)\b/g, '').replace(/\s+/g, ' ').replace(/^[\s|:-]+|[\s|:-]+$/g, '');
+    while (/\s\d{4,}$/.test(desc)) desc = desc.replace(/\s\d{4,}$/, '');                  // drop trailing reference numbers
+    desc = desc.slice(0, 80);
+    if (/\b(starting|beginning|opening|ending|closing|available|running)\s+balance\b|^balance\b|^total\b/i.test(desc)) { if (!isNaN(toNum(amts[amts.length - 1]))) prevBal = toNum(amts[amts.length - 1]); continue; }
+    if (!dir) dir = OUT_WORDS.test(desc) && !IN_WORDS.test(desc) ? 'exp' : IN_WORDS.test(desc) ? 'inc' : 'exp';
+    if (hasBal && !isNaN(bal)) prevBal = bal;
+    rows.push({date, desc: desc || (dir === 'inc' ? 'Money in' : 'Money out'), a: Math.abs(a), dir});
+  }
+  return rows;
+}
+
+/* ---- CSV ---- */
+function parseCSV(text) {
+  const out = []; let row = [], cell = '', q = false;
+  const sep = (text.split('\n')[0].match(/;/g) || []).length > (text.split('\n')[0].match(/,/g) || []).length ? ';' : ',';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += c; }
+    else if (c === '"') q = true;
+    else if (c === sep) { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); out.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if (cell || row.length) { row.push(cell); out.push(row); }
+  return out.filter(r => r.some(x => x.trim()));
+}
+function guessColumns(header) {
+  const h = header.map(x => x.toLowerCase().trim()), find = (re, skip = []) => h.findIndex((x, k) => re.test(x) && !skip.includes(k));
+  const date = find(/date|posted|time/);
+  const desc = [/desc|detail|particular|narrat|remark|memo/, /merchant|payee|name|transaction/, /reference/].map(re => find(re, [date])).find(k => k >= 0) ?? -1;
+  return {
+    date,
+    desc,
+    out: find(/debit|withdraw|money out|amount out|paid out|outflow|sent/),
+    inn: find(/credit|deposit|money in|amount in|inflow|received/),
+    amt: find(/^amount|amount \(|amt|value|total/),
+    type: find(/^type$|dr\/cr|cr\/dr|direction|txn type|transaction type/),
+  };
+}
+function rowsFromTable(table, cols) {
+  const fy = today().getFullYear(), rows = [];
+  for (const r of table) {
+    const date = parseDateStr(r[cols.date], fy); if (!date) continue;
+    let a = NaN, dir = null;
+    if (cols.out >= 0 || cols.inn >= 0) {
+      const o = cols.out >= 0 ? toNum(r[cols.out]) : NaN, i = cols.inn >= 0 ? toNum(r[cols.inn]) : NaN;
+      if (!isNaN(o) && o !== 0) { a = Math.abs(o); dir = 'exp'; } else if (!isNaN(i) && i !== 0) { a = Math.abs(i); dir = 'inc'; }
+    }
+    if (isNaN(a) && cols.amt >= 0) {
+      const v = toNum(r[cols.amt]); if (!isNaN(v) && v !== 0) { a = Math.abs(v); dir = v < 0 ? 'exp' : null; }
+    }
+    if (isNaN(a)) continue;
+    const desc = (cols.desc >= 0 ? r[cols.desc] : '').trim().slice(0, 80);
+    if (!dir && cols.type >= 0) { const t = String(r[cols.type]).toLowerCase(); dir = /\b(dr|debit|out|sent|payment|withdraw)/.test(t) ? 'exp' : /\b(cr|credit|in|received|deposit)/.test(t) ? 'inc' : null; }
+    if (!dir) dir = IN_WORDS.test(desc) && !OUT_WORDS.test(desc) ? 'inc' : 'exp';
+    rows.push({date, desc: desc || (dir === 'inc' ? 'Money in' : 'Money out'), a, dir});
+  }
+  return rows;
+}
+
+/* ---- PDF (pdf.js, loaded only when needed) ---- */
+let pdfLib = null;
+function loadPdfJs() {
+  if (pdfLib) return pdfLib;
+  pdfLib = new Promise((res, rej) => {
+    const s = document.createElement('script'); s.src = 'vendor/pdfjs/pdf.min.js';
+    s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js'; res(window.pdfjsLib); };
+    s.onerror = () => { pdfLib = null; rej(new Error('Couldn’t load the PDF reader. Check your connection.')); };
+    document.head.appendChild(s);
+  });
+  return pdfLib;
+}
+async function pdfLines(buf, password) {
+  const lib = await loadPdfJs();
+  const doc = await lib.getDocument({data: buf, password, isEvalSupported: false, disableFontFace: true}).promise;
+  const lines = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const tc = await (await doc.getPage(p)).getTextContent(), rows = new Map();
+    for (const it of tc.items) {
+      if (!it.str.trim()) continue;
+      const y = Math.round(it.transform[5] / 3) * 3;                     // group items on the same line
+      if (!rows.has(y)) rows.set(y, []);
+      rows.get(y).push({x: it.transform[4], s: it.str});
+    }
+    [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([, items]) => lines.push(items.sort((a, b) => a.x - b.x).map(i => i.s).join(' ')));
+  }
+  return lines;
+}
+
+/* ---- the import sheet ---- */
+let imp = null;   // {rows, source}
+function statementSheet() {
+  openSheet(`<div class="sheethead"><h2>Import a statement</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    <p class="muted">Works with Excel, PDF or CSV statements from your bank, GCash or Maya, including password-locked ones, or text you paste from transaction emails and texts. The file stays on this device; only rows you import are saved.</p>
+    <label class="go filebtn" style="color:var(--on-blue);margin-top:8px">Choose Excel, PDF or CSV file<input type="file" id="stFile" accept=".csv,.pdf,.xlsx,.xls,.txt,text/csv,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"></label>
+    <div id="stPw" hidden><label for="stPass" id="stPwL">This file is locked. Enter its password</label><input id="stPass" type="password" autocomplete="off"><button class="go" type="button" id="stPwGo">Open</button>
+      <p class="muted">Banks and e-wallets usually say what the password is in the email that came with the statement. It’s only used to open the file on this device and is never saved.</p></div>
+    <label for="stPaste">Or paste transactions</label>
+    <textarea id="stPaste" rows="4" placeholder="Nov 5, 2026  Sent to Juan  500.00&#10;11/06/2026  Salary  28,910.88"></textarea>
+    <button class="plain" type="button" id="stPasteGo">Read pasted text</button>
+    <div class="err" id="stErr"></div>`, () => {
+    let pending = null;   // {kind, buf} waiting for a password
+    const fail = m => { $('stErr').textContent = m; };
+    const busy = m => { $('stErr').innerHTML = m ? `<span class="muted">${esc(m)}</span>` : ''; };
+    const askPw = (kind, buf, wrong) => { pending = {kind, buf}; $('stPw').hidden = false; $('stPwL').textContent = `This ${kind === 'pdf' ? 'PDF' : 'Excel file'} is locked. Enter its password`; $('stPass').value = ''; $('stPass').focus(); if (wrong) fail('That password didn’t work. Try again.'); else busy(''); };
+    const readPdf = async (buf, pw) => {
+      busy('Reading PDF…');
+      try { const rows = rowsFromLines(await pdfLines(buf.slice(0), pw)); busy(''); rows.length ? reviewRows(rows, 'PDF') : fail('No transactions found in this PDF. Try the Excel or CSV version, or paste the rows.'); }
+      catch (e) { if (e && e.name === 'PasswordException') askPw('pdf', buf, !!pw); else fail(e.message || 'Couldn’t read this PDF.'); }
+    };
+    const readXlsx = async (buf, pw) => {
+      try {
+        let bytes = u8(buf);
+        if (bytes[0] === 0xD0 && bytes[1] === 0xCF) {              // locked (or old .xls)
+          if (pw == null) {
+            const c = readCfb(buf);
+            if (!c.read('EncryptionInfo')) throw new Error('This is an old-style .xls file. Open it in Excel or Google Sheets and save it as .xlsx or CSV.');
+            return askPw('xlsx', buf);
+          }
+          busy('Unlocking… 0%');
+          bytes = await decryptXlsx(buf, pw, pct => busy(`Unlocking… ${pct}%`));
+        }
+        busy('Reading spreadsheet…');
+        const table = (await xlsxToTable(bytes)).map(r => r.map(c => String(c)));
+        busy(''); mapCsv(table);
+      } catch (e) { if (e && e.name === 'PasswordException') askPw('xlsx', buf, true); else fail(e.message || 'Couldn’t read this Excel file.'); }
+    };
+    $('stFile').addEventListener('change', async e => {
+      const f = e.target.files[0]; if (!f) return; fail('');
+      const buf = new Uint8Array(await f.arrayBuffer());
+      if (buf[0] === 0x25 && buf[1] === 0x50) return readPdf(buf);                               // %PDF
+      if ((buf[0] === 0x50 && buf[1] === 0x4B) || (buf[0] === 0xD0 && buf[1] === 0xCF)) return readXlsx(buf);   // xlsx zip / locked
+      const text = new TextDecoder().decode(buf);
+      if (/\.csv$/i.test(f.name) || text.split('\n').slice(0, 8).some(l => (l.match(/[,;]/g) || []).length >= 2)) return mapCsv(parseCSV(text));
+      const rows = rowsFromLines(text.split(/\r?\n/)); rows.length ? reviewRows(rows, 'file') : fail('No transactions found in this file.');
+    });
+    $('stPwGo').addEventListener('click', () => { if (!pending) return; const {kind, buf} = pending; kind === 'pdf' ? readPdf(buf, $('stPass').value) : readXlsx(buf, $('stPass').value); });
+    $('stPass').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('stPwGo').click(); } });
+    $('stPasteGo').addEventListener('click', () => {
+      const rows = rowsFromLines($('stPaste').value.split(/\r?\n/));
+      rows.length ? reviewRows(rows, 'pasted text') : fail('Each line needs a date and an amount, like “Nov 5 Sent to Juan 500.00”.');
+    });
+  });
+}
+function mapCsv(table) {
+  const hi = table.findIndex(r => r.filter(c => /date|amount|debit|credit|desc|detail|particular/i.test(c)).length >= 2);
+  if (hi < 0) { const rows = rowsFromLines(table.map(r => r.join(' '))); return rows.length ? reviewRows(rows, 'CSV') : ($('stErr').textContent = 'Couldn’t find a date or amount column in this CSV.'); }
+  const header = table[hi], body = table.slice(hi + 1), g = guessColumns(header);
+  const opt = (sel, none) => `${none ? '<option value="-1">—</option>' : ''}${header.map((h, k) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(h || 'Column ' + (k + 1))}</option>`).join('')}`;
+  openSheet(`<div class="sheethead"><h2>Match the columns</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    <p class="muted">Pera guessed these from the file’s headings. Fix any that are wrong.</p>
+    <div class="two"><div><label for="cDate">Date</label><select id="cDate">${opt(g.date)}</select></div><div><label for="cDesc">Description</label><select id="cDesc">${opt(g.desc, 1)}</select></div></div>
+    <div class="two"><div><label for="cOut">Money out (debit)</label><select id="cOut">${opt(g.out, 1)}</select></div><div><label for="cIn">Money in (credit)</label><select id="cIn">${opt(g.inn, 1)}</select></div></div>
+    <div class="two"><div><label for="cAmt">Single amount column</label><select id="cAmt">${opt(g.out < 0 && g.inn < 0 ? g.amt : -1, 1)}</select></div><div><label for="cType">Debit / credit type</label><select id="cType">${opt(g.type, 1)}</select></div></div>
+    <p class="muted" id="cPrev"></p>
+    <button class="go" id="cGo" type="button">Continue</button>`, () => {
+    const cols = () => ({date: +$('cDate').value, desc: +$('cDesc').value, out: +$('cOut').value, inn: +$('cIn').value, amt: +$('cAmt').value, type: +$('cType').value});
+    const prev = () => { const n = rowsFromTable(body, cols()).length; $('cPrev').textContent = `${n} of ${body.length} rows have a date and an amount.`; $('cGo').disabled = !n; };
+    ['cDate', 'cDesc', 'cOut', 'cIn', 'cAmt', 'cType'].forEach(id => $(id).addEventListener('change', prev)); prev();
+    $('cGo').addEventListener('click', () => reviewRows(rowsFromTable(body, cols()), 'CSV'));
+  });
+}
+const isDup = r => { const [y, mo] = r.date.split('-'), m = S.years[y] && S.years[y][+mo - 1]; return !!m && m[r.dir].some(x => Math.abs(x.a - r.a) < 0.005 && (x.d === r.date || (x.n && x.n === r.desc))); };
+function reviewRows(rows, source) {
+  rows.sort((p, q) => p.date.localeCompare(q.date));
+  rows.forEach(r => { r.dup = isDup(r); r.on = !r.dup; });
+  imp = {rows, source};
+  openSheet(`<div class="sheethead"><h2>Review ${rows.length} transactions</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    <p class="muted">Tap ↓ / ↑ to switch money in or out. Untick anything you don’t want. Rows already in Pera are unticked.</p>
+    <div class="imptools"><button class="ghost" data-act="imp-all-on">Select all</button><button class="ghost" data-act="imp-all-off">Select none</button></div>
+    <ul class="list implist" id="impList"></ul>
+    <p class="muted" id="impSum"></p>
+    <button class="go" id="impGo" data-act="imp-go"></button>`, () => renderReview());
+}
+function renderReview() {
+  if (!imp) return;
+  $('impList').innerHTML = imp.rows.map((r, k) => `<li class="${r.on ? '' : 'off'}">
+    <button class="chk ${r.on ? 'on' : ''}" data-act="imp-tog" data-k="${k}" aria-label="${r.on ? 'Skip' : 'Include'} ${esc(r.desc)}"><span>${r.on ? '✓' : ''}</span></button>
+    <span class="t">${esc(r.desc)}<small>${esc(fmtDate(r.date))}${r.dup ? ' · already in Pera' : ''}</small></span>
+    <button class="dirbtn ${r.dir}" data-act="imp-dir" data-k="${k}" aria-label="Switch to ${r.dir === 'inc' ? 'money out' : 'money in'}">${r.dir === 'inc' ? '↓ +' : '↑ −'}${esc(peso(r.a, 2))}</button></li>`).join('');
+  const on = imp.rows.filter(r => r.on), inc = on.filter(r => r.dir === 'inc').reduce((t, r) => t + r.a, 0), exp = on.filter(r => r.dir === 'exp').reduce((t, r) => t + r.a, 0);
+  const months = [...new Set(on.map(r => r.date.slice(0, 7)))].sort().map(k => `${M[+k.slice(5) - 1].slice(0, 3)} ${k.slice(0, 4)}`);
+  $('impSum').textContent = on.length ? `Money in ${peso(inc, 2)} · money out ${peso(exp, 2)} · ${months.join(', ')}` : 'Nothing selected.';
+  $('impGo').textContent = on.length ? `Import ${on.length} transaction${on.length === 1 ? '' : 's'}` : 'Import';
+  $('impGo').disabled = !on.length;
+}
+function importRows() {
+  const on = imp.rows.filter(r => r.on); if (!on.length) return;
+  const keys = new Set(['meta']), made = [];
+  for (const r of on) {
+    const [y, mo] = r.date.split('-');
+    if (!S.years[y]) ensureYear(y);
+    const it = {id: uid(), a: Math.round(r.a * 100) / 100, n: r.desc, d: r.date, src: 'import'};
+    S.years[y][+mo - 1][r.dir].push(it); made.push([y, +mo - 1, r.dir, it.id]); keys.add('y' + y);
+  }
+  imp = null; closeSheet(); commit(...keys);
+  toast(`Imported ${made.length} transaction${made.length === 1 ? '' : 's'}`, () => {
+    made.forEach(([y, i, t, id]) => { const m = S.years[y] && S.years[y][i]; if (m) m[t] = m[t].filter(x => x.id !== id); });
+    commit(...keys);
+  });
+}
+
 /* ================= one click handler for everything ================= */
 function showView(v) {
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('on', x.id === 'v-' + v));
@@ -699,6 +1061,12 @@ document.addEventListener('click', e => {
     case 'bin-restore': return restoreYear(d.y);
     case 'bin-forever': return forgetYear(d.y);
     case 'imp-missing': return importApply('missing');
+    case 'statement': return statementSheet();
+    case 'imp-tog': { const r = imp && imp.rows[+d.k]; if (r) { r.on = !r.on; renderReview(); } return; }
+    case 'imp-dir': { const r = imp && imp.rows[+d.k]; if (r) { r.dir = r.dir === 'inc' ? 'exp' : 'inc'; r.dup = isDup(r); renderReview(); } return; }
+    case 'imp-all-on': if (imp) { imp.rows.forEach(r => { r.on = true; }); renderReview(); } return;
+    case 'imp-all-off': if (imp) { imp.rows.forEach(r => { r.on = false; }); renderReview(); } return;
+    case 'imp-go': return importRows();
     case 'imp-all': return importApply('all');
     case 'acct': return acctForm(j);
     case 'bill-pay': { const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta'); return; }
