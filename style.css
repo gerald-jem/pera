@@ -57,7 +57,7 @@ input.bad{border-color:var(--red)}
 .plain{width:100%;color:var(--blue);font-weight:600;margin-top:6px}
 .danger{width:100%;color:var(--red);font-weight:600;margin-top:6px}
 .ghost{color:var(--blue);font-weight:600;padding:0 8px}
-.toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 10px);transform:translate(-50%,-140%);background:var(--ink);color:var(--bg);padding:4px 4px 4px 16px;border-radius:14px;display:flex;align-items:center;gap:8px;z-index:20;font-size:14px;max-width:92vw;transition:transform .2s;pointer-events:none}
+.toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 10px);transform:translate(-50%,calc(-100% - 40px));background:var(--ink);color:var(--bg);padding:4px 4px 4px 16px;border-radius:14px;display:flex;align-items:center;gap:8px;z-index:20;font-size:14px;max-width:92vw;transition:transform .2s;pointer-events:none}
 .toast.on{transform:translate(-50%,0)}.toast button{color:var(--bg);font-weight:600;padding:0 12px;pointer-events:auto}.toast button[hidden]{display:none}
 .note{font-size:13px;color:var(--mute);background:var(--card);border-radius:12px;padding:10px 12px;margin:10px 0}
 .auth{max-width:420px;margin:12vh auto 0;padding:0 22px}
@@ -65,3 +65,28 @@ input.bad{border-color:var(--red)}
 .err{color:var(--red);font-size:14px;min-height:21px;margin-top:8px}
 .filebtn{position:relative;overflow:hidden;display:grid;place-items:center}.filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
 @media(prefers-reduced-motion:reduce){.sheet,.scrim,.toast{transition:none!important}}
+
+/* ===== Desktop / wide screens: sidebar nav, two-column home, centered dialog ===== */
+.brand,.fab-txt{display:none}
+@media(hover:hover){.rowbtn:hover,.card[data-act]:hover,.tab:hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}button:active{opacity:.75}}
+@media(min-width:960px){
+  .app{max-width:1120px;margin:0 0 0 240px;padding:28px 48px 56px}
+  .tabs{top:0;right:auto;width:240px;border-top:0;border-right:1px solid var(--line);padding:24px 14px;background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none}
+  .tabs nav{display:flex;flex-direction:column;align-items:stretch;gap:2px;max-width:none}
+  .brand{display:flex;align-items:center;gap:10px;order:-2;font:600 22px Literata,Georgia,serif;padding:0 10px 20px}.brand img{width:32px;height:32px;border-radius:9px}
+  .tabs nav>div:has(.fab){order:-1;margin-bottom:14px}
+  .fab{width:100%;height:46px;border-radius:12px;margin:0;display:flex;align-items:center;justify-content:center;gap:8px;font-size:15px;font-weight:600;box-shadow:none}.fab>span:first-child{font-size:22px;line-height:1}
+  .fab-txt{display:inline}
+  .tab{flex-direction:row;justify-content:flex-start;gap:12px;font-size:15px;padding:0 12px;border-radius:10px}
+  .tab[aria-current=page]{background:color-mix(in srgb,var(--blue) 10%,transparent)}
+  h1{font-size:36px}
+  #v-home.on{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr);gap:48px;align-items:start}
+  .home-side h2{margin-top:4px}
+  .fig{height:300px}
+  #v-months,#v-savings,#v-bills{max-width:760px}
+  .scrim{-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+  .sheet{top:50%;bottom:auto;left:50%;right:auto;width:min(480px,92vw);border-radius:20px;padding:12px 24px 24px;max-height:86vh;margin:0;box-shadow:0 20px 60px #0004;transform:translate(-50%,-46%) scale(.98);opacity:0;transition:transform .18s ease,opacity .18s ease,visibility 0s .18s}
+  .sheet.on{transform:translate(-50%,-50%);opacity:1;transition:transform .18s ease,opacity .18s ease}
+  .grab{display:none}
+  .toast{top:20px}
+}

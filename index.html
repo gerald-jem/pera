@@ -36,14 +36,18 @@
   <div class="top"><span class="sync" id="sync"><i></i><span id="syncTxt">Pera</span></span><button class="ghost" id="settingsBtn">Settings</button></div>
 
   <section class="view on" id="v-home">
+    <div class="home-main">
     <div class="muted" id="homeLbl">Total money</div>
     <div class="big" id="homeTotal">₱0</div>
     <div class="chg" id="homeChg"></div>
     <div class="fig"><svg id="chart" role="img" aria-label="Running total money by month"></svg></div>
     <div class="legend"><span>— actual</span><span>┄ planned</span></div>
     <div class="trio" id="homeTrio"></div>
+    </div>
+    <div class="home-side">
     <h2 id="homeListH">This month</h2>
     <ul class="list" id="homeList"></ul>
+    </div>
   </section>
 
   <section class="view" id="v-months">
@@ -67,9 +71,10 @@
 </div>
 
 <div class="tabs"><nav>
+  <div class="brand"><img src="icon-192.png" alt="">Pera</div>
   <button class="tab" data-v="home" aria-current="page"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Home</button>
   <button class="tab" data-v="months"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Months</button>
-  <div><button class="fab" id="fab" aria-label="Add entry">+</button></div>
+  <div><button class="fab" id="fab" aria-label="Add entry"><span aria-hidden="true">+</span><span class="fab-txt">Add entry</span></button></div>
   <button class="tab" data-v="savings"><svg viewBox="0 0 24 24"><path d="M4 10h16v10H4zM2 10l10-6 10 6M8 14v3M12 14v3M16 14v3"/></svg>Savings</button>
   <button class="tab" data-v="bills"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"/></svg>Bills</button>
 </nav></div>
