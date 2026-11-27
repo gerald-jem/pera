@@ -260,7 +260,7 @@ html.applock #mainView,html.applock .tabs,html.applock .sheet,html.applock .toas
 .fchead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
 .fcseg{flex:none}.fcseg button{min-height:36px;padding:0 12px}
 .fccard .ytable th,.fccard .ytable td{white-space:nowrap}
-.fccard .ytable{display:block;overflow-x:auto}
+.fccard .tscroll{overflow-x:auto}.fccard .ytable{width:100%}
 .ladder .r{display:grid;grid-template-columns:5.6em minmax(0,1fr) 5.4em;gap:8px;align-items:center;font-size:13px;padding:5px 0}
 
 .addseg button{padding:0 6px}

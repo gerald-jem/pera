@@ -1116,7 +1116,11 @@ function potValueAt(p, d) {
     const all = [...(p.cycles || []), ...tdForecast(p)];
     if (!all.length) return 0;
     for (const c of all) { const end = c.end || addDays(c.start, p.cycleDays || 181); if (d >= c.start && d < end) return +c.carry + (c.deposits || []).filter(x => x.date <= d).reduce((s, x) => s + x.a, 0); }
-    const last = all[all.length - 1]; return d < all[0].start ? 0 : (last.closing ?? tdCycle(p, last).closing);
+    const last = all[all.length - 1]; if (d < all[0].start) return 0;
+    const close = last.closing ?? tdCycle(p, last).closing, lastEnd = last.end || addDays(last.start, p.cycleDays || 181);
+    const len = planOf(p).cycleDays || p.cycleDays || 181, rate = (last.rate ?? planOf(p).rate ?? p.rate ?? 0) * (1 - (p.tax ?? 0.2));
+    const n = Math.floor(daysBetween(lastEnd, d) / len);          // whole cycles since, interest added at each maturity
+    return close * Math.pow(1 + rate * len / 365, Math.max(0, n));
   }
   if (p.kind === 'mp2') {
     const m = mp2Calc(p); if (!m.maturity) return 0;
@@ -1134,13 +1138,17 @@ function forecastHTML() {
   const t = today(), months = fcYears * 12, pts = [];
   for (let k = 0; k <= months; k++) { const d = iso(new Date(t.getFullYear(), t.getMonth() + k + (k ? 1 : 0), k ? 0 : t.getDate())); pts.push({d, v: ps.reduce((s, p) => s + potValueAt(p, d), 0)}); }
   const yearEnds = []; for (let y = t.getFullYear(); y <= t.getFullYear() + fcYears; y++) { const d = `${y}-12-31`; if (d >= todayIso() && d <= pts[pts.length - 1].d) yearEnds.push({y, d, by: ps.map(p => ({p, v: potValueAt(p, d)})), v: ps.reduce((s, p) => s + potValueAt(p, d), 0)}); }
-  const endV = pts[pts.length - 1].v;
-  window.__fc = pts;
-  return `<div class="card fccard"><div class="fchead"><div><div class="muted">Forecast · all savings</div><div class="serif" style="font-size:26px">${esc(peso(endV))}</div><div class="muted">by ${esc(fmtDate(pts[pts.length - 1].d, {month: 'short', year: 'numeric'}))} if you keep your plans</div></div>
+  const endV = pts[pts.length - 1].v, lastD = pts[pts.length - 1].d;
+  if (!yearEnds.length || yearEnds[yearEnds.length - 1].d < lastD) yearEnds.push({y: fmtDate(lastD, {month: 'short', year: 'numeric'}), d: lastD, by: ps.map(p => ({p, v: potValueAt(p, lastD)})), v: endV});
+  const ends = ps.filter(p => p.kind === 'td').map(p => { const f = tdForecast(p); return f.length ? f[f.length - 1].end : null; }).filter(Boolean).sort();
+  const planEnd = ends.length ? ends[ends.length - 1] : null, showEnd = planEnd && planEnd < lastD;
+  window.__fc = pts; window.__fcEnd = showEnd ? planEnd : null;
+  const cols = ps.length > 1;
+  return `<div class="card fccard"><div class="fchead"><div><div class="muted">Forecast · all savings</div><div class="serif" style="font-size:26px">${esc(peso(endV))}</div><div class="muted">by ${esc(fmtDate(lastD, {month: 'short', year: 'numeric'}))} if you keep your plans${showEnd ? `<br>Deposits planned until ${esc(fmtDate(planEnd, {month: 'short', year: 'numeric'}))}; after that it keeps earning interest` : ''}</div></div>
       <div class="seg fcseg">${[1, 2, 3, 5].map(n => `<button data-act="fc-years" data-n="${n}" aria-pressed="${n === fcYears}">${n}y</button>`).join('')}</div></div>
     <div class="fig" style="height:200px"><svg id="fcChart" role="img" aria-label="Forecast of total savings"></svg></div>
-    <table class="ytable"><thead><tr><th>End of</th>${ps.map(p => `<th>${esc(p.name.split(' ')[0])}</th>`).join('')}<th>Total</th></tr></thead><tbody>
-      ${yearEnds.map(r => `<tr><td>${r.y}</td>${r.by.map(x => `<td>${esc(pesoS(x.v))}</td>`).join('')}<td><b>${esc(pesoS(r.v))}</b></td></tr>`).join('')}</tbody></table>
+    <div class="tscroll"><table class="ytable"><thead><tr><th>End of</th>${cols ? ps.map(p => `<th>${esc(p.name.split(' ')[0])}</th>`).join('') : ''}<th>${cols ? 'Total' : esc(ps[0].name)}</th><th>Growth</th></tr></thead><tbody>
+      ${yearEnds.map((r, k) => { const prevV = k ? yearEnds[k - 1].v : pts[0].v; return `<tr><td>${r.y}</td>${cols ? r.by.map(x => `<td>${esc(pesoS(x.v))}</td>`).join('') : ''}<td><b>${esc(pesoS(r.v))}</b></td><td class="up">+${esc(pesoS(r.v - prevV))}</td></tr>`; }).join('')}</tbody></table></div>
     <p class="muted">Uses each time deposit’s deposit plan, MP2’s planned contributions and current dividend rate, and savings-account interest. Tap an account to change its plan.</p></div>`;
 }
 function drawForecast() {
@@ -1150,7 +1158,8 @@ function drawForecast() {
   const line = pts.map((p, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p.v).toFixed(1)).join('');
   const yrs = pts.map((p, i) => [p, i]).filter(([p], i) => i && p.d.slice(5, 7) === '01').map(([p, i]) => `<line x1="${X(i)}" x2="${X(i)}" y1="${pt}" y2="${H - pb}" stroke="var(--line)"/><text x="${X(i) + 3}" y="${H - 5}" font-size="11" fill="var(--mute)">${p.d.slice(0, 4)}</text>`).join('');
   s.innerHTML = `${yrs}<path d="${line}L${X(pts.length - 1)} ${H - pb}L${X(0)} ${H - pb}Z" fill="var(--blue)" opacity=".12"/><path d="${line}" fill="none" stroke="var(--blue)" stroke-width="2.5" stroke-linejoin="round"/>
-    <circle cx="${X(0)}" cy="${Y(pts[0].v)}" r="4" fill="var(--bg)" stroke="var(--blue)" stroke-width="2"/><text x="${X(0) + 8}" y="${Math.max(12, Y(pts[0].v) - 8)}" font-size="11" fill="var(--ink)">Now</text>`;
+    <circle cx="${X(0)}" cy="${Y(pts[0].v)}" r="4" fill="var(--bg)" stroke="var(--blue)" stroke-width="2"/><text x="${X(0) + 8}" y="${Math.min(H - pb - 6, Y(pts[0].v) + 16)}" font-size="11" font-weight="600" fill="var(--ink)">Now</text>
+    ${window.__fcEnd ? (() => { const i = pts.findIndex(p => p.d >= window.__fcEnd); if (i < 0) return ''; const x = X(i), right = x > W * 0.7; return `<line x1="${x}" x2="${x}" y1="${pt}" y2="${H - pb}" stroke="var(--mute)" stroke-dasharray="3 4"/><text x="${right ? x - 5 : x + 5}" y="${pt + 10}" text-anchor="${right ? 'end' : 'start'}" font-size="11" fill="var(--mute)">plan ends</text>`; })() : ''}`;
 }
 const fcRO = new ResizeObserver(drawForecast);
 // forecast section inside a time-deposit sheet
