@@ -379,6 +379,21 @@ function renderMonths(ser) {
   $('yearFoot').textContent = rows.length ? `${selYear}: income ${peso(rows.reduce((a, p) => a + p.inc, 0))}, spent ${peso(rows.reduce((a, p) => a + p.exp, 0))}, saved ${peso(rows.reduce((a, p) => a + p.sav, 0))}.` : '';
 }
 
+function billTotals(now) {
+  const box = $('billSum'), un = (S.meta.bills || []).filter(x => !x.paid && x.due);
+  if (!un.length) { box.hidden = true; return; }
+  const t = iso(now), sum = l => l.reduce((s, x) => s + +x.a, 0);
+  const late = un.filter(x => x.due < t), cm = {y: String(now.getFullYear()), i: now.getMonth()}, nd = new Date(now.getFullYear(), now.getMonth() + 1, 1), nm = {y: String(nd.getFullYear()), i: nd.getMonth()};
+  const inM = m => un.filter(x => x.count !== false && (b => b.y === m.y && b.i === m.i)(billMonth(x.due)));
+  const thisM = inM(cm), nextM = inM(nm), later = un.filter(x => !thisM.includes(x) && !nextM.includes(x) && x.due >= t);
+  const by = {}; un.forEach(x => { const k = x.name.toLowerCase(), e = by[k] = by[k] || {name: x.name, a: 0, n: 0, last: x.due, next: null}; e.a += +x.a; e.n++; if (x.due > e.last) e.last = x.due; if (x.due >= t && (!e.next || x.due < e.next.due)) e.next = x; });
+  const per = Object.values(by).sort((p, q) => q.a - p.a);
+  box.hidden = false;
+  box.innerHTML = `<div class="muted">Unpaid bills</div><div class="big billbig">${esc(peso(sum(un), 2))}</div>
+    <div class="muted">${un.length} payment${un.length === 1 ? '' : 's'}${late.length ? ` · <span class="dn">${esc(peso(sum(late), 2))} past due</span> <button class="plain inl" data-act="bills-late-paid">Mark all paid</button>` : ''}</div>
+    <div class="trio billtrio"><div class="tile"><span>This month</span><b class="dn">${esc(pesoS(sum(thisM)))}</b><small>${M[cm.i].slice(0, 3)} · ${thisM.length} bill${thisM.length === 1 ? '' : 's'}</small></div><div class="tile"><span>Next month</span><b>${esc(pesoS(sum(nextM)))}</b><small>${M[nm.i].slice(0, 3)} · ${nextM.length} bill${nextM.length === 1 ? '' : 's'}</small></div><div class="tile"><span>Later</span><b>${esc(pesoS(sum(later)))}</b><small>${later.length} bill${later.length === 1 ? '' : 's'}</small></div></div>
+    <details class="perbill"${per.length <= 4 ? ' open' : ''}><summary>By bill</summary><ul>${per.map(e => `<li><span>${esc(e.name)}<small>${e.n} left${e.next ? ` · next ${esc(fmtDate(e.next.due, {month: 'short', day: 'numeric'}))} ${esc(peso(+e.next.a, 2))}` : ''}${e.n > 1 ? ` · until ${esc(fmtDate(e.last, {month: 'short', year: 'numeric'}))}` : ''}</small></span><b>${esc(peso(e.a, 2))}</b></li>`).join('')}</ul></details>`;
+}
 function renderBills() {
   const now = today(); now.setHours(0, 0, 0, 0);
   const b = (S.meta.bills || []).map((x, j) => ({...x, j})).sort((p, q) => (p.paid - q.paid) || p.due.localeCompare(q.due));
@@ -389,6 +404,7 @@ function renderBills() {
       <span class="amt" style="${x.paid ? 'opacity:.5;text-decoration:line-through' : ''}">${esc(peso(+x.a, 2))}</span></button>
       <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete ${esc(x.name)}">×</button></li>`;
   }).join('') || '<li class="empty">No bills yet. Type one above.</li>';
+  billTotals(now);
   fillPicker();
   // your own bills first, then the common ones
   const used = uniqNames((S.meta.bills || []).slice().reverse().map(x => x.name));
@@ -2288,6 +2304,11 @@ document.addEventListener('click', e => {
       const b = S.meta.bills[+j]; b.paid = !b.paid; commit('meta');
       if (b.count !== false && b.due) { const m = billMonth(b.due); toast(b.paid ? `${b.name} paid · no longer counted in ${M[m.i].slice(0, 3)} ${m.y}` : `${b.name} unpaid · counted in ${M[m.i].slice(0, 3)} ${m.y} again`); }
       return;
+    }
+    case 'bills-late-paid': {
+      const t = todayIso(), late = (S.meta.bills || []).filter(x => !x.paid && x.due && x.due < t); if (!late.length) return;
+      late.forEach(x => { x.paid = true; }); commit('meta');
+      toast(`${late.length} past-due bill${late.length === 1 ? '' : 's'} marked paid`, () => { late.forEach(x => { x.paid = false; }); commit('meta'); }); return;
     }
     case 'bill-edit': return billForm(+j);
     case 'bill-del': return removeBill(+j);
