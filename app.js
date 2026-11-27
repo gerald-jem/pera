@@ -805,6 +805,7 @@ const DATE_AT_START = /^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[/.-]\d{1,2}[/.
 // lines are plain strings (paste) or {text, items:[{x, w, s}]} from a PDF, which lets us use Debit/Credit column positions
 const OUT_HEAD = /^(debit|debits|withdrawals?|money out|outflow|paid out|amount out|sent|dr)$/i, IN_HEAD = /^(credit|credits|deposits?|money in|inflow|amount in|received|cr)$/i, BAL_HEAD = /^(running )?balance$/i;
 const DRCR = /^\s*(DR|CR|D|C)\b/;
+const NOT_DESC = /page \d|for billing|customer service|transaction history|account (number|name)|statement|print|^date\b|balance$|unionbank/i;
 function rowsFromLines(lines) {
   lines = lines.map(l => typeof l === 'string' ? {text: l, items: null} : l);
   // a transaction can wrap over several lines (date + ref, description, then amount + balance):
@@ -814,8 +815,11 @@ function rowsFromLines(lines) {
     const t = L.text.replace(/\s+/g, ' ').trim(); if (!t) continue;
     if (DATE_AT_START.test(t) && parseDateStr(DATE_AT_START.exec(t)[1], 2000)) { cur = {text: t, items: L.items ? [...L.items] : null, open: !(t.match(AMT_RE) || []).length}; merged.push(cur); continue; }
     if (cur && cur.open) { cur.text += ' ' + t; if (cur.items && L.items) cur.items.push(...L.items); if ((t.match(AMT_RE) || []).length) cur.open = false; continue; }
+    // a short line with no amount right after a transaction is the rest of its description ("CITY PH", "246229")
+    if (cur && !cur.open && !(t.match(AMT_RE) || []).length && t.length <= 48 && !NOT_DESC.test(t) && (cur.extra = (cur.extra || 0) + 1) <= 2) { cur.tail = ((cur.tail || '') + ' ' + t).trim(); continue; }
     cur = null; merged.push({text: t, items: L.items});
   }
+  merged.forEach(m => { if (m.tail) m.tailText = m.tail; });
   lines = merged;
   const yearHint = (lines.map(l => l.text).join(' ').match(/\b20\d{2}\b/) || [String(today().getFullYear())])[0];
   const raw = []; let cols = null;
@@ -838,12 +842,14 @@ function rowsFromLines(lines) {
     const suf = DRCR.exec(rest.slice(am.end)); if (!hint && suf) hint = /^D/i.test(suf[1]) ? 'exp' : 'inc';
     if (!hint && /^\s*\+/.test(am.s)) hint = 'inc';
     if (!hint && cols && L.items) {   // which column is the amount printed under?
-      const item = L.items.find(i => i.s.includes(am.s.trim().replace(/^[-+]/, '')) && !BAL_HEAD.test(i.s));
+      const num = am.s.replace(/[^\d.,]/g, ''), cands = L.items.filter(i => i.s.replace(/[^\d.,]/g, '').endsWith(num) && /\d/.test(i.s));
+      const item = cands.length > 1 && cols.bal != null ? cands.reduce((p, q) => Math.abs(q.x - cols.bal) > Math.abs(p.x - cols.bal) ? q : p) : cands[0];
       if (item) { const x = item.x + (item.w || 0) / 2; hint = Math.abs(x - cols.out) < Math.abs(x - cols.inn) ? 'exp' : 'inc'; }
     }
     found.forEach(x => { rest = rest.replace(x.s, ' '); });
     let desc = rest.replace(/\b(PHP|Php)\b/g, '').replace(/\b(DR|CR)\b/g, '').replace(/\s+/g, ' ').replace(/^[\s|:-]+|[\s|:-]+$/g, '');
     desc = desc.split(' ').filter(w => !/^[A-Za-z]{0,4}\d[\w-]{4,}$/.test(w) || !/\d{4,}/.test(w.replace(/-/g, ''))).join(' ').replace(/\s+/g, ' ').trim();
+    if (L.tailText) desc = (desc + ' ' + L.tailText.split(' ').filter(w => !/\d{4,}/.test(w.replace(/[-_]/g, ''))).join(' ')).replace(/\s+/g, ' ').trim();
     desc = desc.slice(0, 80);
     const isBalLine = /\b(starting|beginning|opening|ending|closing|available|running|previous)\s+balance\b|^balance\b|^total\b|balance (brought|carried) forward/i.test(desc);
     raw.push({date, desc, a: Math.abs(a), bal: isNaN(bal) ? null : bal, hint, isBalLine});
