@@ -14,7 +14,7 @@
 <title>Pera</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
 
@@ -72,9 +72,15 @@
 
   <section class="view" id="v-bills">
     <h1>Bills</h1>
+    <form id="qbForm" class="quick" autocomplete="off">
+      <label for="qb">Add a bill — just type it</label>
+      <div class="qrow"><input id="qb" enterkeyhint="done" placeholder="SPayLater 10,794 Jan 5" autocapitalize="words"><button class="qgo" id="qbGo" type="submit" disabled>Add</button></div>
+      <div class="qprev" id="qbPrev" aria-live="polite"></div>
+      <div class="chips" id="qbChips"></div>
+    </form>
     <p class="muted">Tap the circle when paid. Tap a bill to edit or delete it.</p>
     <ul class="list" id="billList"></ul>
-    <button class="go" id="addBill">Add a bill</button>
+    <button class="plain" id="addBill">Add with the full form</button>
   </section>
 </div>
 
@@ -93,8 +99,8 @@
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grab"></div><div id="sheetBody"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"><span id="toastMsg"></span><button id="toastBtn" hidden>Undo</button></div>
 
-<script src="config.js?v=5"></script>
+<script src="config.js?v=6"></script>
 <script src="vendor/supabase.js"></script>
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

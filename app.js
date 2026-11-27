@@ -247,7 +247,67 @@ function renderBills() {
       <button class="rowbtn" data-act="bill-edit" data-j="${x.j}"><span class="t">${esc(x.name)}<small class="${late ? 'dn' : ''}">${x.paid ? 'Paid · ' : late ? 'Past due · ' : 'Due '}${esc(fmtDate(x.due))}${x.count === true ? ` · expense in ${M[billMonth(x.due).i].slice(0, 3)} ${billMonth(x.due).y}` : ''}</small></span>
       <span class="amt" style="${x.paid ? 'opacity:.5;text-decoration:line-through' : ''}">${esc(peso(+x.a, 2))}</span></button>
       <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete ${esc(x.name)}">×</button></li>`;
-  }).join('') || '<li class="empty">No bills.</li>';
+  }).join('') || '<li class="empty">No bills yet. Type one above.</li>';
+  const names = [...new Set((S.meta.bills || []).slice().reverse().map(x => x.name))].slice(0, 6);
+  $('qbChips').innerHTML = names.map(n => `<button type="button" class="chip" data-act="qb-name" data-n="${esc(n)}">${esc(n)}</button>`).join('');
+}
+
+
+/* ================= quick-add bills: "SPayLater 10,794 Jan 5 x3" ================= */
+const MON = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+const MRE = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
+const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const mkDate = (y, m, day) => new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));   // clamps 31 → 28/30
+function parseBill(text) {
+  let t = ' ' + String(text).replace(/\s+/g, ' ') + ' ';
+  const t0 = today(); t0.setHours(0, 0, 0, 0);
+  let date = null, day = null, n = 1, m;
+  const cut = r => { t = t.slice(0, r.index) + ' ' + t.slice(r.index + r[0].length); };
+  const year = y => !y ? null : +y < 100 ? 2000 + +y : +y;
+  const future = (mo, d, y) => { if (y) return mkDate(y, mo, d); let x = mkDate(t0.getFullYear(), mo, d); if (x < t0) x = mkDate(t0.getFullYear() + 1, mo, d); return x; };
+  // repeats: x3, 3x, for 3 months, 3 installments
+  if ((m = /\s(?:x\s?(\d{1,2})|(\d{1,2})\s?x|(?:for\s+)?(\d{1,2})\s*(?:months?|mos?|installments?|payments?))(?=\s)/i.exec(t))) { n = +(m[1] || m[2] || m[3]); cut(m); }
+  // dates
+  if ((m = /\s(\d{4})-(\d{1,2})-(\d{1,2})(?=\s)/.exec(t))) { date = mkDate(+m[1], +m[2] - 1, +m[3]); cut(m); }
+  else if ((m = new RegExp(`\\s(?:due\\s+|on\\s+)?(${MRE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(20\\d{2}))?(?=[\\s,])`, 'i').exec(t))) { date = future(MON.indexOf(m[1].slice(0, 3).toLowerCase()), +m[2], year(m[3])); cut(m); }
+  else if ((m = new RegExp(`\\s(?:due\\s+|on\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(${MRE})\\.?(?:,?\\s+(20\\d{2}))?(?=[\\s,])`, 'i').exec(t))) { date = future(MON.indexOf(m[2].slice(0, 3).toLowerCase()), +m[1], year(m[3])); cut(m); }
+  else if ((m = /\s(?:due\s+|on\s+)?(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?=\s)/.exec(t))) { date = future(+m[1] - 1, +m[2], year(m[3])); cut(m); }
+  else if ((m = /\s(?:due\s+|on\s+)?(?:every\s+|the\s+)*(\d{1,2})(?:st|nd|rd|th)(?:\s+of\s+the\s+month)?(?=\s)/i.exec(t))) { day = +m[1]; cut(m); }
+  else if ((m = /\s(today|tomorrow|next month)(?=\s)/i.exec(t))) { const w = m[1].toLowerCase(); date = new Date(t0); if (w === 'tomorrow') date.setDate(date.getDate() + 1); if (w === 'next month') date = mkDate(t0.getFullYear(), t0.getMonth() + 1, t0.getDate()); cut(m); }
+  if (day && day <= 31) { date = mkDate(t0.getFullYear(), t0.getMonth(), day); if (date < t0) date = mkDate(t0.getFullYear(), t0.getMonth() + 1, day); }
+  // amount: ₱10,794 · 10794.50 · 2.5k · php 500
+  let a = NaN;
+  if ((m = /\s(?:₱|php\s?|p(?=\d))?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(k)?(?=[\s,])/i.exec(t))) { a = Math.round(parseFloat(m[1].replace(/,/g, '')) * (m[2] ? 1000 : 1) * 100) / 100; cut(m); }
+  const name = t.replace(/\b(due|on|every|for|each|monthly|bill|pay|php|the|of)\b/gi, ' ').replace(/[,·-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const dates = [];
+  if (date) { const d0 = date.getDate(); for (let k = 0; k < Math.min(n, 36); k++) dates.push(iso(mkDate(date.getFullYear(), date.getMonth() + k, day || d0))); }
+  // reuse the spelling of a bill you already have ("spaylater" → "SPayLater")
+  const known = (S.meta.bills || []).map(x => x.name).find(x => x.toLowerCase() === name.toLowerCase());
+  return {name: known || (name ? name[0].toUpperCase() + name.slice(1) : ''), a, dates};
+}
+function quickPreview() {
+  const v = $('qb').value.trim(), out = $('qbPrev'), go = $('qbGo');
+  if (!v) { out.innerHTML = '<span class="muted">Try “SPayLater 10,794 Jan 5” or “Lazada 12,252.53 every 16th x3”.</span>'; go.disabled = true; return null; }
+  const p = parseBill(v), miss = [];
+  if (!p.name) miss.push('a name'); if (isNaN(p.a)) miss.push('an amount'); if (!p.dates.length) miss.push('a due date');
+  const bits = [`<b>${esc(p.name || '—')}</b>`, isNaN(p.a) ? '<span class="muted">amount?</span>' : esc(peso(p.a, 2))];
+  if (p.dates.length) {
+    const first = billMonth(p.dates[0]);
+    bits.push(p.dates.length > 1 ? `${p.dates.length} monthly payments from ${esc(fmtDate(p.dates[0]))}` : `due ${esc(fmtDate(p.dates[0]))}`);
+    bits.push(`expense in ${M[first.i].slice(0, 3)} ${first.y}${p.dates.length > 1 ? ' onward' : ''}`);
+  } else bits.push('<span class="muted">due date?</span>');
+  out.innerHTML = bits.join(' · ') + (miss.length ? `<br><span class="muted">Still need ${miss.join(', ')}.</span>` : '');
+  go.disabled = !!miss.length;
+  return miss.length ? null : p;
+}
+function quickAdd() {
+  const p = quickPreview(); if (!p) return;
+  const made = p.dates.map(due => ({name: p.name, a: p.a, due, paid: false, count: true}));
+  const keys = ['meta'];
+  made.forEach(b => { S.meta.bills.push(b); const m = billMonth(b.due); if (!S.years[m.y]) { ensureYear(m.y); keys.push('y' + m.y); } });
+  commit(...keys);
+  $('qb').value = ''; quickPreview();
+  toast(made.length > 1 ? `${made.length} ${p.name} payments added` : `${p.name} added`, () => { S.meta.bills = S.meta.bills.filter(b => !made.includes(b)); commit('meta'); });
 }
 
 /* ================= sheet + toast ================= */
@@ -486,6 +546,7 @@ document.addEventListener('click', e => {
     case 'bill-edit': return billForm(+j);
     case 'bill-del': return removeBill(+j);
     case 'bill-add': return billForm(null);
+    case 'qb-name': { const q = $('qb'); q.value = d.n + ' '; q.focus(); quickPreview(); return; }
     case 'sync-now': push().then(pull).then(() => { closeSheet(); toast(dirty.size ? 'Still offline — will retry' : 'Synced'); }); return;
     case 'export': return exportData();
     case 'signout': closeSheet(); return sb.auth.signOut();
@@ -493,6 +554,9 @@ document.addEventListener('click', e => {
 });
 $('fab').dataset.act = 'fab';
 $('addBill').dataset.act = 'bill-add';
+$('qb').addEventListener('input', quickPreview);
+$('qbForm').addEventListener('submit', e => { e.preventDefault(); quickAdd(); });
+quickPreview();
 $('settingsBtn').dataset.act = 'settings';
 
 document.addEventListener('keydown', e => {

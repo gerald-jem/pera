@@ -132,3 +132,12 @@ input.bad{border-color:var(--red)}
 
 .check{display:flex;align-items:center;gap:12px;margin:16px 0 0;color:var(--ink);font-size:15px;min-height:44px;cursor:pointer}
 .check input{width:22px;height:22px;min-height:0;padding:0;flex:none;-webkit-appearance:auto;appearance:auto;accent-color:var(--blue)}
+
+.quick{background:var(--card);border-radius:16px;padding:4px 14px 14px;margin-bottom:14px}
+.quick label{color:var(--ink);font-weight:600;font-size:14px}
+.qrow{display:flex;gap:8px}.qrow input{flex:1;background:var(--bg)}
+.qgo{background:var(--blue);color:var(--on-blue);font-weight:600;padding:0 20px;min-height:48px}.qgo:disabled{opacity:.35}
+.qprev{font-size:14px;margin-top:8px;min-height:21px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.chips:empty{display:none}
+.chip{min-height:36px;padding:0 14px;border-radius:18px;border:1px solid var(--line);background:var(--bg);font-size:14px}
+@media (min-width:900px){#addBill{width:auto}}
