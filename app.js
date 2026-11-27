@@ -816,40 +816,85 @@ const monOpts = sel => M.map((m, i) => `<option value="${i}" ${i == sel ? 'selec
 const title = t => ({inc: 'income', exp: 'expense', sav: 'savings'}[t]);
 
 function entryForm(o) {
-  // o: {t, y, i, id, a, n, edit}
-  let t = o.t || 'exp';
-  const now = today();
-  openSheet(`<div class="sheethead"><h2 id="efTitle">${o.edit ? 'Edit' : 'Add'} ${title(t)}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
-    ${o.edit ? '' : `<div class="seg">${[['exp', 'Expense'], ['inc', 'Income'], ['sav', 'Savings']].map(([k, l]) => `<button type="button" data-type="${k}" aria-pressed="${k === t}">${l}</button>`).join('')}</div>`}
+  // o: {t, y, i, id, a, n, d, edit} — t: exp | inc | dep (savings deposit) | bill | sav (old monthly savings, edit only)
+  if (o.edit && o.t === 'sav') return oldSavForm(o);
+  const view = (document.querySelector('.view.on') || {}).id || '';
+  let t = o.t || (view === 'v-savings' ? 'dep' : view === 'v-bills' ? 'bill' : 'exp');
+  const T = {exp: 'expense', inc: 'income', dep: 'savings deposit', bill: 'bill'};
+  // default date: today, or the same day inside the month you're adding to
+  const tday = today(), dflt = o.d || (o.y != null ? iso(mkDate(+o.y, o.i, tday.getDate())) : iso(tday));
+  const ps = pots(), billNames = [...new Set([...(S.meta.bills || []).slice().reverse().map(x => x.name), ...PRESETS])];
+  const nm = new Date(tday.getFullYear(), tday.getMonth() + 1, 5);
+  openSheet(`<div class="sheethead"><h2 id="efTitle">${o.edit ? 'Edit' : 'Add'} ${T[t]}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    ${o.edit ? '' : `<div class="seg addseg">${[['exp', 'Expense'], ['inc', 'Income'], ['dep', 'Savings'], ['bill', 'Bill']].map(([k, l]) => `<button type="button" data-type="${k}" aria-pressed="${k === t}">${l}</button>`).join('')}</div>`}
     <form id="ef" novalidate>
+      <div data-for="dep"><label for="fp">Savings account</label>${ps.length ? `<select id="fp">${ps.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>` : `<p class="note">You don’t have a savings account yet. <button type="button" class="ghost" data-act="pot-new">Add one</button></p>`}</div>
+      <div data-for="bill"><label for="fbn">Bill</label><select id="fbn">${billNames.map(n => `<option>${esc(n)}</option>`).join('')}<option value="__other">Other…</option></select><input id="fbo" maxlength="40" placeholder="Name of the bill" hidden style="margin-top:8px"></div>
       <label for="fa">Amount (sums like 1.84+329 work)</label>
       <input id="fa" class="amtin" inputmode="decimal" autocomplete="off" enterkeyhint="done" value="${o.a != null ? esc(o.a) : ''}">
-      <div id="noteWrap" ${t === 'sav' ? 'hidden' : ''}><label for="fn">Note</label><input id="fn" maxlength="60" enterkeyhint="done" placeholder="Groceries, salary, bills…" value="${esc(o.n || '')}"></div>
-      <div class="two"><div><label for="fm">Month</label><select id="fm" ${o.edit ? 'disabled' : ''}>${monOpts(o.i ?? now.getMonth())}</select></div>
-      <div><label for="fy">Year</label><select id="fy" ${o.edit ? 'disabled' : ''}>${yearOpts(o.y ?? now.getFullYear())}</select></div></div>
-      <p class="muted" id="savHint" ${t === 'sav' ? '' : 'hidden'}>Sets how much you moved to savings that month (replaces the old amount).</p>
+      <div data-for="exp inc"><label for="fn">Note</label><input id="fn" maxlength="60" enterkeyhint="done" placeholder="Groceries, salary, bills…" value="${esc(o.n || '')}"></div>
+      <div class="two"><div><label for="fdt" id="fdtL">Date</label><input id="fdt" type="date" value="${esc(dflt)}"></div>
+        <div data-for="bill"><label for="fbN">Payments</label><select id="fbN">${NOPTS.map(n => `<option value="${n}">${n === 1 ? 'Once' : n + ' months'}</option>`).join('')}</select></div></div>
+      <p class="muted" id="efHint"></p>
       <button class="go" type="submit">${o.edit ? 'Save' : 'Add'}</button>
-      ${o.edit && t !== 'sav' ? '<button type="button" class="danger" id="fdel">Delete entry</button>' : ''}
+      ${o.edit ? '<button type="button" class="danger" id="fdel">Delete entry</button>' : ''}
     </form>`, body => {
-    body.querySelectorAll('[data-type]').forEach(b => b.addEventListener('click', () => {
-      t = b.dataset.type;
-      body.querySelectorAll('[data-type]').forEach(x => x.setAttribute('aria-pressed', x === b));
-      $('efTitle').textContent = 'Add ' + title(t);
-      $('noteWrap').hidden = t === 'sav'; $('savHint').hidden = t !== 'sav';
-      if (t === 'sav' && !$('fa').value) { const m = (S.years[$('fy').value] || [])[+$('fm').value]; if (m && m.sav) $('fa').value = m.sav; }
-    }));
+    const show = () => {
+      body.querySelectorAll('[data-for]').forEach(el => { el.hidden = !el.dataset.for.split(' ').includes(t); });
+      $('efTitle').textContent = (o.edit ? 'Edit ' : 'Add ') + T[t];
+      $('fdtL').textContent = t === 'bill' ? 'Due date' : 'Date';
+      if (t === 'bill' && $('fdt').value === dflt && !o.edit) $('fdt').value = iso(nm);
+      if (t !== 'bill' && $('fdt').value === iso(nm) && !o.edit) $('fdt').value = dflt;
+      hint();
+    };
+    const hint = () => {
+      const dt = $('fdt').value, h = $('efHint');
+      if (!dt) { h.textContent = ''; return; }
+      const [y, m] = dt.split('-');
+      h.textContent = t === 'dep' ? `Shows as ${M[+m - 1]}’s Saved, not subtracted from total money.`
+        : t === 'bill' ? (() => { const bm = billMonth(dt); return `Counted as an expense in ${M[bm.i]} ${bm.y} until you mark it paid.`; })()
+        : `Goes into ${M[+m - 1]} ${y}.`;
+    };
+    body.querySelectorAll('[data-type]').forEach(b => b.addEventListener('click', () => { t = b.dataset.type; body.querySelectorAll('[data-type]').forEach(x => x.setAttribute('aria-pressed', x === b)); show(); }));
+    $('fdt').addEventListener('input', hint);
+    $('fbn').addEventListener('change', () => {
+      const v = $('fbn').value; $('fbo').hidden = v !== '__other';
+      const past = (S.meta.bills || []).filter(x => x.name === v).sort((a, b) => a.due.localeCompare(b.due)).pop();
+      if (past && !$('fa').value) { $('fa').value = past.a; const d = new Date(dnum(past.due)); $('fdt').value = iso(mkDate(d.getFullYear(), d.getMonth() + 1, d.getDate())); hint(); }
+    });
+    show();
     $('ef').addEventListener('submit', e => {
       e.preventDefault();
-      const a = parseAmt($('fa').value);
-      if (isNaN(a)) { $('fa').classList.add('bad'); $('fa').focus(); return; }
-      const y = o.edit ? o.y : $('fy').value, i = o.edit ? o.i : +$('fm').value;
-      const n = $('fn') ? $('fn').value.trim() : '';
-      const m = ensureYear(y)[i];
-      closeSheet();
-      if (t === 'sav') { const old = m.sav; m.sav = a; commit('y' + y); toast(`Savings for ${M[i]} set`, () => { m.sav = old; commit('y' + y); }); return; }
-      if (o.id) { const x = m[t].find(z => z.id === o.id); if (x) { x.a = a; x.n = n; } commit('y' + y); toast('Saved'); return; }
-      const it = {id: uid(), a, n}; m[t].push(it); commit('y' + y);
-      toast(`Added to ${M[i]}`, () => { m[t] = m[t].filter(z => z.id !== it.id); commit('y' + y); });
+      const a = parseAmt($('fa').value), dt = $('fdt').value;
+      const bad = isNaN(a) || (t !== 'exp' && t !== 'inc' && a <= 0); $('fa').classList.toggle('bad', bad); $('fdt').classList.toggle('bad', !dt);
+      if (bad || !dt) { if (bad) $('fa').focus(); return; }
+      const [y, mo] = dt.split('-'), i = +mo - 1, n = $('fn').value.trim();
+      if (t === 'dep') {
+        const p = potById($('fp') && $('fp').value); if (!p) return;
+        if (p.kind === 'td' && (p.cycles || []).length && dt > todayIso()) {   // a future deposit after this cycle ends belongs to the forecast plan
+          const end = tdCycle(p, p.cycles[p.cycles.length - 1]).end;
+          if (dt >= end) { $('efHint').innerHTML = `<span class="dn">That’s after this cycle ends on ${esc(fmtDate(end))}. Future cycles come from the forecast plan; add it when the new cycle starts.</span>`; $('fdt').classList.add('bad'); return; }
+        }
+        closeSheet(); const undo = addDeposit(p, dt, a); commit('meta');
+        toast(`${peso(a, 2)} added to ${p.name}`, () => { undo(); commit('meta'); }); return;
+      }
+      if (t === 'bill') {
+        const name = $('fbn').value === '__other' ? $('fbo').value.trim() : $('fbn').value;
+        if (!name) { $('fbo').classList.add('bad'); return; }
+        const cnt = +$('fbN').value, d0 = new Date(dnum(dt)), made = [], keys = ['meta'];
+        for (let k = 0; k < cnt; k++) { const b = {name, a, due: iso(mkDate(d0.getFullYear(), d0.getMonth() + k, d0.getDate())), paid: false, count: true}; S.meta.bills.push(b); made.push(b); const bm = billMonth(b.due); if (!S.years[bm.y]) { ensureYear(bm.y); keys.push('y' + bm.y); } }
+        closeSheet(); commit(...keys);
+        toast(made.length > 1 ? `${made.length} ${name} payments added` : `${name} added`, () => { S.meta.bills = S.meta.bills.filter(b => !made.includes(b)); commit('meta'); }); return;
+      }
+      if (o.edit) {   // may move to another month when the date changes
+        const from = S.years[o.y][o.i], k = from[t].findIndex(z => z.id === o.id); if (k < 0) return closeSheet();
+        const x = from[t][k], before = {...x}, keys = new Set(['y' + o.y, 'y' + y]);
+        x.a = a; x.n = n; if (o.d || dt !== dflt) x.d = dt;
+        if (y !== String(o.y) || i !== o.i) { from[t].splice(k, 1); ensureYear(y)[i][t].push(x); keys.add('meta'); }
+        closeSheet(); commit(...keys); toast('Saved'); return;
+      }
+      const it = {id: uid(), a, n, d: dt}; ensureYear(y)[i][t].push(it); closeSheet(); commit('y' + y, 'meta');
+      toast(`Added to ${M[i]}${y !== String(today().getFullYear()) ? ' ' + y : ''}`, () => { const m = S.years[y][i]; m[t] = m[t].filter(z => z.id !== it.id); commit('y' + y); });
     });
     const d = $('fdel');
     if (d) d.addEventListener('click', () => {
@@ -860,6 +905,29 @@ function entryForm(o) {
     });
   });
 }
+// a deposit goes into the right place in the savings account; returns an undo function
+function addDeposit(p, date, a) {
+  const it = {id: uid(), date, a};
+  if (p.kind === 'mp2') { (p.deposits = p.deposits || []).push(it); return () => { p.deposits = p.deposits.filter(x => x !== it); }; }
+  if (p.kind === 'basic') { (p.txns = p.txns || []).push(it); return () => { p.txns = p.txns.filter(x => x !== it); }; }
+  p.cycles = p.cycles || []; const added = [];
+  if (!p.cycles.length) { p.cycles.push({start: date, end: addDays(date, p.cycleDays || 181), rate: p.rate, carry: 0, deposits: []}); added.push(p.cycles[0]); }
+  // past the last cycle's end: roll over into new cycles first, like the bank does
+  while (date >= tdCycle(p, p.cycles[p.cycles.length - 1]).end) { const last = tdCycle(p, p.cycles[p.cycles.length - 1]); const c = {start: last.end, end: addDays(last.end, p.cycleDays || 181), rate: p.rate, carry: Math.round(last.closing * 100) / 100, deposits: []}; p.cycles.push(c); added.push(c); }
+  let c = p.cycles[0]; for (const x of p.cycles) if (x.start <= date) c = x;
+  (c.deposits = c.deposits || []).push(it);
+  return () => { c.deposits = c.deposits.filter(x => x !== it); p.cycles = p.cycles.filter(x => !added.includes(x)); };
+}
+// old-style monthly "To savings" amount (from the spreadsheet) — edit only
+function oldSavForm(o) {
+  openSheet(`<div class="sheethead"><h2>To savings · ${M[o.i]} ${esc(o.y)}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    <p class="muted">An amount from your spreadsheet that is subtracted from total money. New savings go into a savings account instead.</p>
+    <form id="ef" novalidate><label for="fa">Amount</label><input id="fa" class="amtin" inputmode="decimal" value="${esc(o.a)}"><button class="go" type="submit">Save</button><button type="button" class="danger" id="fdel">Remove</button></form>`, () => {
+    const m = S.years[o.y][o.i], old = m.sav;
+    $('ef').addEventListener('submit', e => { e.preventDefault(); const a = parseAmt($('fa').value); if (isNaN(a)) return $('fa').classList.add('bad'); m.sav = a; closeSheet(); commit('y' + o.y); toast('Saved', () => { m.sav = old; commit('y' + o.y); }); });
+    $('fdel').addEventListener('click', () => { m.sav = 0; closeSheet(); commit('y' + o.y); toast('Removed', () => { m.sav = old; commit('y' + o.y); }); });
+  });
+}
 
 function monthHTML(y, i, ser) {
   const p = (ser || series()).find(q => q.y === y && q.i === i);
@@ -868,7 +936,7 @@ function monthHTML(y, i, ser) {
     <div class="trio"><div class="tile"><span>Income</span><b class="up">${esc(peso(p.inc))}</b></div><div class="tile"><span>Spent</span><b class="dn">${esc(peso(p.exp))}</b></div><div class="tile"><span>Saved</span><b>${esc(peso(p.sav))}</b></div></div>
     <p class="muted">Total money at month end: <b style="color:var(--ink)">${esc(peso(p.total, 2))}</b></p>
     <ul class="list">${entryRows(y, i) || '<li class="empty">No entries.</li>'}</ul>
-    <button class="plain" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}">Set savings for ${M[i]}</button>
+    <button class="plain" data-act="add-dep-month" data-y="${esc(y)}" data-i="${i}">+ Add to savings</button>
     ${(S.years[y][i].inc.length || S.years[y][i].exp.length || +S.years[y][i].sav) ? `<button class="danger" data-act="month-clear" data-y="${esc(y)}" data-i="${i}">Clear ${M[i]}</button>` : ''}`;
 }
 let sheetMonth = null;   // month shown in the phone's bottom sheet
@@ -1481,9 +1549,10 @@ document.addEventListener('click', e => {
     case 'eye': hideTotal = !hideTotal; store.set('pera:hideTotal', hideTotal); render(); return;
     case 'fab': closeSheet(); return entryForm({});
     case 'settings': return settings();
-    case 'edit-entry': { const x = S.years[d.y][+d.i][d.t].find(z => z.id === d.id); if (x) entryForm({t: d.t, y: d.y, i: +d.i, id: d.id, a: x.a, n: x.n, edit: true}); return; }
+    case 'edit-entry': { const x = S.years[d.y][+d.i][d.t].find(z => z.id === d.id); if (x) entryForm({t: d.t, y: d.y, i: +d.i, id: d.id, a: x.a, n: x.n, d: x.d, edit: true}); return; }
     case 'edit-sav': return entryForm({t: 'sav', y: d.y, i: +d.i, a: S.years[d.y][+d.i].sav || '', edit: true});
     case 'add-in-month': return entryForm({y: d.y, i: +d.i});
+    case 'add-dep-month': return entryForm({t: 'dep', y: d.y, i: +d.i});
     case 'entry-del': {
       const m = S.years[d.y][+d.i], list = m[d.t], k = list.findIndex(z => z.id === d.id); if (k < 0) return;
       const [x] = list.splice(k, 1); commit('y' + d.y);
