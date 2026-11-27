@@ -251,9 +251,11 @@ function renderBills() {
       <span class="amt" style="${x.paid ? 'opacity:.5;text-decoration:line-through' : ''}">${esc(peso(+x.a, 2))}</span></button>
       <button class="x" data-act="bill-del" data-j="${x.j}" aria-label="Delete ${esc(x.name)}">×</button></li>`;
   }).join('') || '<li class="empty">No bills yet. Type one above.</li>';
-  const names = [...new Set((S.meta.bills || []).slice().reverse().map(x => x.name))].slice(0, 6);
   fillPicker();
-  $('qbChips').innerHTML = names.map(n => `<button type="button" class="chip" data-act="qb-name" data-n="${esc(n)}">${esc(n)}</button>`).join('');
+  // your own bills first, then the common ones
+  const used = [...new Set((S.meta.bills || []).slice().reverse().map(x => x.name))];
+  const names = [...used, ...PRESETS.filter(p => !used.some(u => u.toLowerCase() === p.toLowerCase()))];
+  $('qbChips').innerHTML = names.map((n, k) => `<button type="button" class="chip${k < used.length ? ' mine' : ''}" data-act="qb-name" data-n="${esc(n)}">${esc(n)}</button>`).join('');
 }
 
 
@@ -289,7 +291,7 @@ function parseBill(text) {
   const known = (S.meta.bills || []).map(x => x.name).find(x => x.toLowerCase() === name.toLowerCase());
   return {name: known || (name ? name[0].toUpperCase() + name.slice(1) : ''), a, dates};
 }
-const PRESETS = ['SPayLater', 'Lazada PayLater', 'GGives', 'Atome', 'Home Credit', 'BillEase', 'Credit card', 'Meralco', 'Internet', 'Rent'];
+const PRESETS = ['SPayLater', 'Maya Black', 'Lazada PayLater', 'GGives', 'Atome', 'Home Credit', 'BillEase', 'Credit card', 'Meralco', 'Internet', 'Rent'];
 const NOPTS = [1, 2, 3, 4, 5, 6, 9, 12, 18, 24];
 let qbMode = store.get('pera:qbmode') === 'type' ? 'type' : 'pick', pickSig = '';
 function setQbMode(m) {

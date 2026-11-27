@@ -145,3 +145,9 @@ input.bad{border-color:var(--red)}
 .three{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.8fr) minmax(0,1.1fr);gap:8px}
 .quick .go{margin-top:12px}.quick .go:disabled{opacity:.4}
 .quick #qbType .chips{margin-top:8px}
+
+/* shortcut names scroll sideways in one row */
+#qbChips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin-inline:-14px;padding-inline:14px;scroll-snap-type:x proximity}
+#qbChips::-webkit-scrollbar{display:none}
+#qbChips .chip{flex:none;scroll-snap-align:start}
+#qbChips .chip.mine{border-color:var(--blue);color:var(--blue);font-weight:600}
