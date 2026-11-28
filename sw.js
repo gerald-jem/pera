@@ -1,10 +1,11 @@
 // Pera service worker: network first, cache as the offline fallback.
 // Bump VERSION whenever app files change.
-const VERSION = 'pera-v67';
+const VERSION = 'pera-v68';
 // big files that rarely change (screenshot + PDF readers, fonts, Supabase): kept across app updates.
 // Bump VENDOR only when something in vendor/ changes.
 const VENDOR = 'pera-vendor-1';
-const SHELL = ['./', 'index.html', 'style.css?v=67', 'money.js?v=67', 'app.js?v=67', 'config.js?v=67',
+const SHARE = 'pera-share';   // screenshots shared into Pera from other apps, until the app picks them up
+const SHELL = ['./', 'index.html', 'style.css?v=68', 'money.js?v=68', 'app.js?v=68', 'config.js?v=68',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -16,13 +17,25 @@ self.addEventListener('install', e => {
   ]));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== VENDOR).map(k => caches.delete(k))))
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== VENDOR && k !== SHARE).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 // Same-origin GETs: try the network, fall back to the cached copy when offline.
 // Supabase requests are never touched.
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
+  // Share → Pera (Android): keep the images, then open the app, which asks what they are
+  if (e.request.method === 'POST' && url.origin === location.origin && url.pathname.endsWith('/share')) {
+    e.respondWith((async () => {
+      try {
+        const fd = await e.request.formData(), files = fd.getAll('shots').filter(f => f && f.size), c = await caches.open(SHARE);
+        for (const k of await c.keys()) await c.delete(k);
+        await Promise.all(files.map((f, k) => c.put(`shared/${k}`, new Response(f, {headers: {'content-type': f.type || 'image/png', 'x-name': encodeURIComponent(f.name || `shot-${k}.png`)}}))));
+        return Response.redirect(`./?share=${files.length}`, 303);
+      } catch { return Response.redirect('./?share=0', 303); }
+    })());
+    return;
+  }
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   if (url.pathname.includes('/vendor/')) {   // cache first: these files only change with a new VENDOR name
     e.respondWith(caches.open(VENDOR).then(async c => (await c.match(e.request, {ignoreSearch: true})) || fetch(e.request).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; })));
