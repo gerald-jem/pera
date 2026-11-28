@@ -36,7 +36,8 @@ const today = () => new Date();
 // due before the 15th comes out of the previous month's (S.meta.payCut, 0 = always the month before)
 const ord = n => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
 const payCut = () => { const c = S && S.meta && S.meta.payCut; return c == null ? 15 : +c; };
-const billMonth = due => { const d = new Date(due + 'T00:00:00'), cut = payCut(), same = cut > 0 && d.getDate() >= cut; d.setDate(1); if (!same) d.setMonth(d.getMonth() - 1); return {y: String(d.getFullYear()), i: d.getMonth()}; };
+const PM = window.PeraMoney, {iso, mkDate, dnum, addDays, daysBetween, J, merge3, DAYMS} = PM;   // money maths lives in money.js (tested on its own)
+const billMonth = due => PM.billMonth(due, payCut());
 const billsIn = (y, i) => (S.meta.bills || []).map((b, j) => ({...b, j})).filter(b => b.count !== false && !b.paid && b.due && (m => m.y === y && m.i === i)(billMonth(b.due)));
 
 /* ================= state ================= */
@@ -63,7 +64,7 @@ const kBase = () => 'pera:base:' + user.id;      // last copy agreed with the se
 const kSnaps = () => 'pera:snaps:' + user.id;    // safety copies kept on this device
 let base = {};
 let dataVer = 0;
-function saveLocal() { dataVer++; store.set(kData(), S); store.set(kDirty(), [...dirty]); store.set(kBase(), base); }
+function saveLocal() { dataVer++; carveCache = null; store.set(kData(), S); store.set(kDirty(), [...dirty]); store.set(kBase(), base); }
 function loadLocal() {
   const d = store.get(kData()); S = d && d.meta ? d : blank();
   dirty = new Set(store.get(kDirty()) || []);
@@ -71,38 +72,6 @@ function loadLocal() {
 }
 /* ---- three-way merge: keep what this device changed, take everything else from the server ---- */
 // stable JSON (keys sorted) so the same data always compares equal, whatever order its fields were written in
-const J = x => JSON.stringify(x === undefined ? null : x, (k, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o, key) => (o[key] = v[key], o), {}) : v);
-function pick(b, l, r, hasBase) {
-  // changed here since the last sync → ours; otherwise the server's (fall back to ours if the server has nothing)
-  if (hasBase && J(l) !== J(b)) return l;
-  return r !== undefined ? r : l;
-}
-function mergeById(b, l, r, hasBase) {           // arrays of objects with ids (savings accounts)
-  if (!Array.isArray(l) || !Array.isArray(r)) return pick(b, l, r, hasBase);
-  const bm = new Map((b || []).map(x => [x.id, x])), lm = new Map(l.map(x => [x.id, x])), rm = new Map(r.map(x => [x.id, x])), out = [];
-  const ids = [...new Set([...r.map(x => x.id), ...l.map(x => x.id)])];
-  for (const id of ids) {
-    const bx = bm.get(id), lx = lm.get(id), rx = rm.get(id);
-    if (lx && rx) out.push(hasBase && J(lx) !== J(bx) ? lx : rx);
-    else if (lx && !rx) { if (!hasBase || !bx || J(lx) !== J(bx)) out.push(lx); }      // new here, or server deleted something we didn't touch
-    else if (rx && !lx) { if (!hasBase || !bx || J(rx) !== J(bx)) out.push(rx); }      // new on server, or we deleted it
-  }
-  return out;
-}
-function merge3(key, b, l, r) {
-  const hasBase = b !== undefined && b !== null;
-  if (r === undefined || r === null) return l;
-  if (key === 'meta') {
-    const out = {};
-    for (const f of new Set([...Object.keys(l || {}), ...Object.keys(r || {})])) {
-      out[f] = f === 'savings' ? mergeById(hasBase ? b[f] : undefined, l[f], r[f], hasBase && b[f] !== undefined) : pick(hasBase ? b[f] : undefined, l[f], r[f], hasBase);
-      if (out[f] === undefined) delete out[f];
-    }
-    return out;
-  }
-  const lm = (l && l.months) || [], rm = (r && r.months) || [], bm = hasBase ? (b.months || []) : [];
-  return {months: M.map((_, i) => pick(bm[i], lm[i], rm[i], hasBase) || {inc: [], exp: [], sav: 0})};
-}
 function snapshot(reason) {
   const list = store.get(kSnaps()) || [], last = list[0];
   if (last && Date.now() - last.at < 3 * 3600e3 && reason !== 'force') return;   // at most one every 3 hours
@@ -238,12 +207,16 @@ setInterval(() => { if (dirty.size && navigator.onLine) push(); }, 30000);
 /* ================= maths ================= */
 // money that went into savings left as a transfer: count it as saved, not spent
 // (₱29k transferred, ₱10k of it deposited to savings → ₱19k spent, ₱10k saved)
-function savedOut(y, i) {
-  const m = S.years[y] && S.years[y][i]; if (!m) return 0;
-  const linked = potDepositsIn(y, i).reduce((t, x) => t + x.d.a, 0); if (!linked) return 0;
-  const tr = m.exp.reduce((t, x) => t + ((x.c && CAT_NAMES.includes(x.c) ? x.c : catOf(x.n || '')) === 'Transfers' && +x.a > 0 ? +x.a : 0), 0);
-  return Math.min(linked, tr);
+let carveCache = null;   // reset whenever data is saved or the screen is drawn
+const catOfX = x => (x.c && CAT_NAMES.includes(x.c) ? x.c : catOf(x.n || ''));
+function carvePlan() {
+  if (carveCache) return carveCache;
+  const deps = (S.meta.savings || []).flatMap(p => p.kind === 'td' ? (p.cycles || []).flatMap(c => c.deposits || []) : p.kind === 'mp2' ? (p.deposits || []) : (p.txns || []).filter(x => x.a > 0));
+  return carveCache = PM.carvePlan(S.years, deps, x => catOfX(x) === 'Transfers');
 }
+// money that went into savings left as a transfer: count it as saved, not spent
+// (₱29k transferred, ₱10k of it deposited to savings → ₱19k spent, ₱10k saved)
+const savedOut = (y, i) => carvePlan()[`${y}-${i}`] || 0;
 function series() {
   const out = [], now = today(), CY = now.getFullYear(), CM = now.getMonth();
   let run = 0;
@@ -291,6 +264,7 @@ function enterView(v) {
   const c = $('chart'); if (v === 'home' && c) { c.classList.remove('drawn'); void c.getBoundingClientRect(); c.classList.add('drawn'); clearTimeout(c._d); c._d = setTimeout(() => c.classList.remove('drawn'), 1300); }
 }
 function render() {
+  carveCache = null;
   const ser = series();
   renderHome(ser); renderInsights(ser); renderMonths(ser); renderSavings(); renderBills();
   if (desk.matches) renderDetail(ser);
@@ -345,7 +319,7 @@ function homeMonth(cur, prev) {
   }
   const tick = isNow && cur.inc > 0 ? Math.min(100, day / days * 100) : null;
   box.hidden = false;
-  box.innerHTML = `<div class="hhead"><h3>${isNow ? 'This month' : M[cur.i] + ' ' + cur.y}</h3>${isNow ? `<span class="muted">Day ${day} of ${days}</span>` : ''}</div>
+  box.innerHTML = `<div class="hhead"><h2>${isNow ? 'This month' : M[cur.i] + ' ' + cur.y}</h2>${isNow ? `<span class="muted">Day ${day} of ${days}</span>` : ''}</div>
     <div class="leftnum"><b class="${over ? 'dn' : ''}" data-count="left" data-n="${Math.abs(left)}" data-d="0">${esc(peso(Math.abs(left)))}</b><span>${over ? 'more went out than came in' : cur.inc ? 'left after spending and saving' : 'no income added yet'}</span></div>
     <div class="pbar${over ? ' over' : ''}" role="img" aria-label="${Math.round(pct)}% of income used"><b style="width:${pct.toFixed(1)}%"></b>${sPct > 0 && !over ? `<b class="savpart" style="left:${(pct - sPct).toFixed(1)}%;width:${sPct.toFixed(1)}%"></b>` : ''}${tick != null ? `<i style="left:${tick.toFixed(1)}%" title="Even pace for day ${day}"></i>` : ''}</div>
     <div class="pmeta"><span>${cur.inc ? (savedPart > 0 && !over ? `${Math.round(cur.spent / cur.inc * 100)}% spent · <span class="savtxt">${Math.round(savedPart / cur.inc * 100)}% saved</span>` : Math.round(out / cur.inc * 100) + '% of income used') : ''}</span>${tick != null ? '<span class="muted">┆ even pace</span>' : ''}</div>
@@ -356,10 +330,10 @@ function homeBills() {
   const box = $('hBills'), t0 = todayIso(), from = iso(new Date(today().getFullYear(), today().getMonth(), today().getDate() - 30)), lim = iso(new Date(today().getFullYear(), today().getMonth(), today().getDate() + 35));
   const list = (S.meta.bills || []).map((b, j) => ({...b, j})).filter(b => !b.paid && b.due && b.due >= from && b.due <= lim).sort((a, b) => a.due < b.due ? -1 : 1);
   const late = list.filter(b => b.due < t0), soon = list.filter(b => b.due >= t0), show = [...late, ...soon].slice(0, 5);
-  if (!list.length) { box.hidden = !(S.meta.bills || []).length; box.innerHTML = `<div class="hhead"><h3>Coming up</h3><button class="plain" data-act="go-view" data-v="bills">Bills →</button></div><p class="muted">No unpaid bills in the next 5 weeks.</p>`; return; }
+  if (!list.length) { box.hidden = !(S.meta.bills || []).length; box.innerHTML = `<div class="hhead"><h2>Coming up</h2><button class="plain" data-act="go-view" data-v="bills">Bills →</button></div><p class="muted">No unpaid bills in the next 5 weeks.</p>`; return; }
   const total = list.reduce((s, b) => s + +b.a, 0), dd = d => { const n = Math.round((new Date(dnum(d)) - new Date(dnum(t0))) / 864e5); return n < 0 ? `<span class="dn">${-n} day${n === -1 ? '' : 's'} late</span>` : n === 0 ? '<span class="dn">due today</span>' : n === 1 ? 'tomorrow' : `in ${n} days`; };
   box.hidden = false;
-  box.innerHTML = `<div class="hhead"><h3>Coming up</h3><button class="plain" data-act="go-view" data-v="bills">All bills →</button></div>
+  box.innerHTML = `<div class="hhead"><h2>Coming up</h2><button class="plain" data-act="go-view" data-v="bills">All bills →</button></div>
     <p class="muted">${esc(peso(total))} due in the next 5 weeks${late.length ? ` · ${late.length} past due` : ''}</p>
     <ul class="blist">${show.map(b => `<li><span class="bd"><b>${esc(fmtDate(b.due, {day: 'numeric'}))}</b><small>${esc(fmtDate(b.due, {month: 'short'}))}</small></span><span class="bn">${esc(b.name)}<small>${dd(b.due)}</small></span><span class="ba">${esc(peso(+b.a, 2))}</span><button class="paybtn" data-act="bill-pay" data-j="${b.j}" aria-label="Mark ${esc(b.name)} due ${esc(fmtDate(b.due))} as paid">Paid</button></li>`).join('')}</ul>
     ${list.length > show.length ? `<p class="muted">+ ${list.length - show.length} more</p>` : ''}`;
@@ -385,7 +359,7 @@ function homeNotes(cur, ser) {
   const rows = spendingIn([{y: cur.y, i: cur.i}]), nod = rows.filter(r => r.cat === 'No description').reduce((s, r) => s + r.a, 0), all = rows.reduce((s, r) => s + r.a, 0);
   if (all > 0 && nod / all > 0.25) notes.push({ic: '✎', cls: '', act: `data-act="goto-month" data-y="${esc(cur.y)}" data-i="${cur.i}"`, h: `${Math.round(nod / all * 100)}% of this month’s spending has no note`, s: 'Add a short note so Insights can sort it'});
   box.hidden = !notes.length;
-  box.innerHTML = `<div class="hhead"><h3>Worth a look</h3></div><ul class="nlist">${notes.slice(0, 3).map(n => `<li><button ${n.act}><span class="ni ${n.cls}">${n.ic}</span><span class="nt">${n.h}<small>${n.s}</small></span><span class="chev">›</span></button></li>`).join('')}</ul>`;
+  box.innerHTML = `<div class="hhead"><h2>Worth a look</h2></div><ul class="nlist">${notes.slice(0, 3).map(n => `<li><button ${n.act}><span class="ni ${n.cls}">${n.ic}</span><span class="nt">${n.h}<small>${n.s}</small></span><span class="chev">›</span></button></li>`).join('')}</ul>`;
 }
 function setEye() {
   const b = $('eyeBtn'); b.setAttribute('aria-pressed', hideTotal); b.setAttribute('aria-label', hideTotal ? 'Show total money' : 'Hide total money');
@@ -446,7 +420,14 @@ function drawChart() {
   ${k < ser.length - 1 ? `<path d="${path(k, ser.length - 1)}" fill="none" stroke="var(--blue)" stroke-width="2" stroke-dasharray="4 5" opacity=".65"/>` : ''}
   <circle cx="${kx}" cy="${Y(ser[k].total)}" r="5" fill="var(--bg)" stroke="var(--blue)" stroke-width="2.5"/>
   <text x="${kx}" y="${Math.max(13, Y(ser[k].total) - 10)}" text-anchor="${anchor}" font-size="12" font-weight="600" fill="var(--ink)">Now</text>
-  ${k < ser.length - 1 && W > 340 ? `<text x="${W - pr}" y="${Math.max(13, Y(last.total) - 9)}" text-anchor="end" font-size="11" fill="var(--mute)">${esc(M[last.i].slice(0, 3) + ' ' + last.y)} · ${esc(pesoS(last.total))}</text>` : ''}`;
+  ${k < ser.length - 1 && W > 340 ? endLabel() : ''}`;
+  // the planned end value: above the end point unless the line passes through there, then below it
+  function endLabel() {
+    const ly = Y(last.total), span = 110, near = ser.map((p, j) => [X(j), Y(p.total)]).filter(([x]) => x >= W - pr - span);
+    const nowY = Y(ser[k].total), blockedAbove = near.some(([, y]) => y < ly - 2 && y > ly - 26) || (kx > W - pr - span && Math.abs(nowY - (ly - 9)) < 24);
+    const y = blockedAbove ? Math.min(H - pb - 4, ly + 17) : Math.max(13, ly - 9);
+    return `<text x="${W - pr}" y="${y}" text-anchor="end" font-size="11" fill="var(--mute)" paint-order="stroke" stroke="var(--card)" stroke-width="3">${esc(M[last.i].slice(0, 3) + ' ' + last.y)} · ${esc(pesoS(last.total))}</text>`;
+  }
 }
 const chartRO = new ResizeObserver(drawChart); chartRO.observe($('chart'));
 
@@ -529,8 +510,6 @@ function billGroupSheet(name) { openSheet(billGroupHTML(name)); sheetBill = name
 /* ================= quick-add bills: "SPayLater 10,794 Jan 5 x3" ================= */
 const MON = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
 const MRE = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
-const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-const mkDate = (y, m, day) => new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));   // clamps 31 → 28/30
 function parseBill(text) {
   let t = ' ' + String(text).replace(/\s+/g, ' ') + ' ';
   const t0 = today(); t0.setHours(0, 0, 0, 0);
@@ -693,10 +672,6 @@ function quickAdd() {
 //   basic {id, name, kind:'basic', rate, tax, txns:[{id, date, a}]}   (a < 0 = withdrawal)
 // Deposits show up as a month's "Saved" but are never subtracted from total money:
 // the transfer itself already appears as money out in the imported statement.
-const DAYMS = 864e5;
-const dnum = s => Date.parse(s + 'T00:00:00');
-const addDays = (s, n) => iso(new Date(dnum(s) + n * DAYMS));
-const daysBetween = (a, b) => Math.round((dnum(b) - dnum(a)) / DAYMS);
 const todayIso = () => iso(today());
 const pots = () => (S.meta.savings = S.meta.savings || []);
 const potById = id => pots().find(p => p.id === id);
@@ -734,25 +709,7 @@ function tdCycle(pot, c) {
 // monthly payout accounts: interest = daily balance × rate × (1 − tax) ÷ 365, paid in on the 1st (and at maturity),
 // then earning interest itself. Matches Maya's statement to the centavo.
 const tdMonthlyOn = p => p.monthly ?? ((p.cycles || []).some(c => (c.credits || []).length) || /maya/i.test(p.name || ''));
-function tdPayouts(pot, c, rate, tax, end) {
-  const ev = {}; const add = (d, a) => { ev[d] = (ev[d] || 0) + a; };
-  if (+c.carry) add(c.start, +c.carry); (c.deposits || []).forEach(d => add(d.date, +d.a));
-  const actual = (c.credits || []), out = [], t = todayIso();
-  let bal = 0, acc = 0, day = c.start, from = c.start;
-  const payout = date => {
-    // a payout the statement already shows (within a few days of the 1st) wins over the prediction
-    const got = actual.filter(x => x.date >= date && daysBetween(date, x.date) <= 4), a = got.length ? got.reduce((s, x) => s + x.a, 0) : Math.round(acc * 100) / 100;
-    if (a > 0 || got.length) out.push({date: got.length ? got[0].date : date, from, a, actual: !!got.length, paid: (got.length ? got[0].date : date) <= t});
-    bal += a; acc = 0; from = date;
-  };
-  for (let n = 0; day < end && n < 800; n++, day = addDays(day, 1)) {
-    if (day.endsWith('-01') && day !== c.start) payout(day);
-    bal += ev[day] || 0;
-    acc += bal * rate * (1 - tax) / 365;
-  }
-  payout(end);   // the last part at maturity
-  return out;
-}
+const tdPayouts = (pot, c, rate, tax, end) => PM.tdPayouts(c, rate, tax, end, todayIso());
 const tdCurrent = pot => { const t = todayIso(), cs = pot.cycles || []; let k = cs.length - 1; for (let i = 0; i < cs.length; i++) if (cs[i].start <= t) k = i; return Math.max(0, k); };
 
 /* ---- MP2: dividend = rate × average monthly balance, credited each year end, 5-year term ---- */
@@ -814,7 +771,7 @@ function renderSavings() {
       <div class="serif" style="font-size:28px">${esc(peso(big, 2))}</div>${bar != null ? `<div class="bar"><i style="width:${(bar * 100).toFixed(1)}%"></i></div>` : ''}<div class="muted">${sub}</div></button>`;
   };
   w.innerHTML = `<div class="savtotal"><div class="muted">In savings now</div><div class="big" style="font-size:clamp(34px,10vw,44px)" data-count="sav" data-n="${total}" data-d="2">${esc(peso(total, 2))}</div>
-      <p class="muted">Deposits here show as each month’s <b>Saved</b> in Months, but aren’t subtracted from total money — the transfer already shows as money out in your imported statement.</p></div>
+      <p class="muted">Deposits here count as that month’s <b>Saved</b>, not spent: Pera takes them out of the month’s transfers (₱29k sent, ₱10k into savings → ₱19k spent). Total money doesn’t change — the transfer already left your bank.</p></div>
     ${goalsHTML()}
     ${pots().length || goals().length ? aiCardHTML('savings', 'card') : ''}
     <h2 class="sech">Accounts</h2>
@@ -973,6 +930,7 @@ function potHTML(p, k, editing, cedit, fedit, frate) {
     const c = tdCycle(p, cs[k]), last = k === cs.length - 1;
     return head + `<div class="chips cyclechips">${cs.map((x, i) => `<button class="chip" data-act="pot-cycle" data-p="${esc(p.id)}" data-k="${i}" aria-pressed="${i === k}">${esc(fmtDate(x.start, {month: 'short', year: 'numeric'}))}</button>`).join('')}</div>
       <div class="trio"><div class="tile"><span>Put in</span><b>${esc(pesoS(c.principal))}</b></div><div class="tile"><span>Interest</span><b class="up">+${esc(peso(c.interest, 2))}</b></div><div class="tile"><span>At maturity</span><b>${esc(pesoS(c.closing))}</b></div></div>
+      ${c.monthly && p.monthly == null && /maya/i.test(p.name || '') && !(p.cycles || []).some(x => (x.credits || []).length) ? `<p class="muted">Monthly interest is on because the name says Maya. Not right? Turn off “Interest is paid in every month” in Edit.</p>` : ''}
       ${c.monthly ? payoutsHTML(c) : c.credited ? `<p class="muted">${esc(peso(c.credited, 2))} interest already paid in this cycle, from your statement (included in the balance).</p>` : ''}
       ${cedit ? `<form id="cycF" class="depedit" novalidate><div class="two"><div><label for="cRate">Interest % per year</label><input id="cRate" inputmode="decimal" value="${(c.rate * 100).toFixed(3).replace(/\.?0+$/, '')}"></div><div><label for="cCarry">Carried over</label><input id="cCarry" inputmode="decimal" value="${esc(cs[k].carry || 0)}"></div></div>
         <div class="two"><div><label for="cStart">Starts</label><input id="cStart" type="date" value="${esc(cs[k].start)}"></div><div><label for="cEnd">Ends</label><input id="cEnd" type="date" value="${esc(c.end)}"></div></div>
@@ -1231,7 +1189,7 @@ const fcRO = new ResizeObserver(drawForecast);
 // forecast section inside a time-deposit sheet
 function payoutsHTML(c) {
   const next = c.pays.find(x => !x.paid), md = d => fmtDate(d, {month: 'short', day: 'numeric'});
-  return `<div class="payouts"><div class="hhead"><h3>Monthly interest</h3>${next ? `<span class="muted">next ${esc(md(next.date))} · <b class="up">~${esc(peso(next.a, 2))}</b></span>` : ''}</div>
+  return `<div class="payouts"><div class="hhead"><h2>Monthly interest</h2>${next ? `<span class="muted">next ${esc(md(next.date))} · <b class="up">~${esc(peso(next.a, 2))}</b></span>` : ''}</div>
     <p class="muted">${esc(peso(c.paid, 2))} paid in so far${c.pays.some(x => x.actual) ? ' (from your statement where added)' : ''} · ${esc(peso(c.interest - c.paid, 2))} more expected by ${esc(md(c.end))}. Predictions assume deposits as listed and the ${pct(c.rate)} rate holds.</p>
     <table class="ytable"><thead><tr><th>Paid on</th><th>For</th><th>Interest</th></tr></thead><tbody>${c.pays.map(x => `<tr class="${x.paid ? '' : 'est'}"><td>${esc(md(x.date))}</td><td>${esc(md(x.from))} – ${esc(md(addDays(x.date, -1)))}</td><td class="up">+${esc(peso(x.a, 2))}${x.actual ? ' ✓' : x.paid ? '' : ''}</td></tr>`).join('')}</tbody></table>
     <p class="muted" style="font-size:12px">✓ = amount from your statement · grey = predicted</p></div>`;
@@ -1558,6 +1516,10 @@ function aiContext(opts = {}) {
   }
   return L.join('\n');
 }
+// when the Philippine facts below were last checked — update FACT_LIST and this date together (Settings shows a reminder after 6 months)
+const FACTS_AS_OF = '2026-11';
+const FACT_LIST = ['Inflation 7.8% (Oct 2026)', 'Pag-IBIG MP2 7.12% for 2025, tax-free', 'Maya Time Deposit Plus 3% base, up to 6%', 'PDIC insures ₱1M per depositor per bank', 'Bank interest: 20% final tax'];
+const factsAge = () => { const [y, m] = FACTS_AS_OF.split('-').map(Number), t = today(); return (t.getFullYear() - y) * 12 + t.getMonth() + 1 - m; };
 // money know-how the AI applies to the person's numbers (rules of thumb, plus Philippine facts with dates — check these when they change)
 // worked out here so the AI explains numbers instead of doing arithmetic
 function planningLines(ser) {
@@ -1586,7 +1548,7 @@ const FIN_KNOWLEDGE = `Money know-how to apply (use it with their numbers; name 
 - Debt and PayLater: pay the full statement balance; BNPL/credit card interest and late fees cost far more than savings earn. Pay highest-rate debt first (avalanche) or smallest first for motivation (snowball). Treat PayLater installments as fixed bills when planning; avoid stacking new ones while old ones run.
 - Sinking funds: for known yearly costs (gifts, Christmas, insurance, gadgets) divide by the months left and set aside each payday. 13th month pay (December) is a good time to top up the emergency fund or clear debt.
 - Big purchases: affordable if it doesn't drop the emergency fund below 3 months and the monthly cost fits under the cap; otherwise suggest saving for it first with a monthly amount and date.
-- Philippines (as of late 2026): bank interest has 20% final tax; PDIC insures deposits up to ₱1,000,000 per depositor per bank (since Mar 2025), so split larger amounts across banks. Pag-IBIG MP2: 5-year term, tax-free dividends, 7.12% for 2025 (declared Feb 2026; future rates vary). Maya Time Deposit Plus: 3% p.a. base, up to 6% boosted, interest paid monthly, ₱1M cap per account. Inflation was 7.8% in Oct 2026 (2026 average so far 5.6%), so a 6% time deposit (4.8% after tax) earns less than inflation; money kept only in low-interest accounts loses value.
+- Philippines (as of ${new Date(+FACTS_AS_OF.slice(0, 4), +FACTS_AS_OF.slice(5) - 1).toLocaleDateString('en-PH', {month: 'long', year: 'numeric'})}; say so if they ask about current rates, which may have changed): bank interest has 20% final tax; PDIC insures deposits up to ₱1,000,000 per depositor per bank (since Mar 2025), so split larger amounts across banks. Pag-IBIG MP2: 5-year term, tax-free dividends, 7.12% for 2025 (declared Feb 2026; future rates vary). Maya Time Deposit Plus: 3% p.a. base, up to 6% boosted, interest paid monthly, ₱1M cap per account. Inflation was 7.8% in Oct 2026 (2026 average so far 5.6%), so a 6% time deposit (4.8% after tax) earns less than inflation; money kept only in low-interest accounts loses value.
 - Stay with savings, budgeting and debt. For specific stocks, funds, crypto, insurance products or tax filing, give general information only.`;
 const AI_RULES = 'You are Pera, a friendly money helper inside a personal finance app for someone in the Philippines. Use only the data given for their numbers; when it doesn’t cover something, say so plainly, but still give a useful suggestion using the know-how below. Show peso amounts like ₱1,234. Be brief and concrete: lead with the answer, then a few short lines or bullets. "No description" means spending recorded without a note, mostly from an old spreadsheet. Only when the person asks about investing, taxes or legal matters, give general information and suggest checking with a licensed professional; never add that note otherwise.\n\n' + FIN_KNOWLEDGE;
 const FOLLOW_RULE = '\n\nAfter the answer, on its own last line, write ">>" followed by 2 or 3 short follow-up questions the person might tap next, in their voice, separated by " | " (each under 45 characters, about their own money, answerable from the data). Example: >> How much should I save each payday? | What if I save ₱25,000 a month?';
@@ -1760,7 +1722,7 @@ function aiCardHTML(id, extraClass = 'hcard') {
   const body = w ? (w.text ? `<div class="aitext">${aiHTML(w.text)}</div>` : `${saved ? `<div class="aitext faded">${aiHTML(saved.text)}</div>` : ''}${dots}`) + `<p class="muted aifoot">${esc(wait || 'Writing a fresh one…')}</p>`
     : saved ? `<div class="aitext">${aiHTML(saved.text)}</div>${stale ? `<p class="stalenote">Your numbers changed since this was written. <button class="linkbtn" data-act="ai-card" data-id="${esc(id)}">Rewrite</button></p>` : ''}<p class="muted aifoot">Written by AI ${esc(new Date(saved.at).toLocaleDateString('en-PH', {month: 'short', day: 'numeric'}))} · double-check the numbers</p>`
     : `<p class="muted">${sp.intro} Uses Google Gemini.</p><button class="ghost wide" data-act="ai-card" data-id="${esc(id)}">${SPARK}Write it</button>`;
-  return `<section class="${extraClass} aicard" data-aikey="${esc(sp.key)}" data-aiid="${esc(id)}" aria-busy="${!!w}"><div class="hhead"><h3><span class="sparkic">${SPARK}</span>${esc(sp.title)}</h3>${btn}</div>${body}</section>`;
+  return `<section class="${extraClass} aicard" data-aikey="${esc(sp.key)}" data-aiid="${esc(id)}" aria-busy="${!!w}"><div class="hhead"><h2><span class="sparkic">${SPARK}</span>${esc(sp.title)}</h2>${btn}</div>${body}</section>`;
 }
 function paintAiCards(key) {
   document.querySelectorAll(`[data-aikey="${CSS.escape(key)}"]`).forEach(el => {
@@ -1838,6 +1800,7 @@ function talkAdd() {
 function aiSettingsHTML() {
   return `<h2>Pera AI</h2>
     <p class="muted">Ask Pera, Sort my spending, monthly summaries and Add by talking use Google Gemini through your Supabase project; the key stays on the server. When you use them, a summary of your numbers (and for some questions, recent entries) is sent to Google. On Gemini’s free tier Google may use that to improve its products.</p>
+    <p class="muted">Money facts the AI uses were last checked <b>${esc(new Date(+FACTS_AS_OF.slice(0, 4), +FACTS_AS_OF.slice(5) - 1).toLocaleDateString('en-PH', {month: 'long', year: 'numeric'}))}</b>: ${esc(FACT_LIST.join(' · '))}.${factsAge() >= 6 ? ' <span class="stalenote" style="display:block;margin-top:6px">These are over 6 months old; rates and inflation may have changed. Ask for them to be refreshed in the app’s code (FACTS_AS_OF).</span>' : ''}</p>
     <div class="note" id="aiStat">${aiOk === true ? 'Pera AI is working.' : aiOk === false ? 'Pera AI isn’t set up yet: deploy the <b>pera-ai</b> function in Supabase (steps in the project README).' : 'Not checked yet.'}</div>
     <button class="ghost wide" data-act="ai-check">${SPARK}Check Pera AI</button>`;
 }
@@ -1925,7 +1888,7 @@ function homeFlow() {
   const box = $('hFlow'); if (!box) return;
   const d = flowData(12); if (d.done.length < 2) { box.hidden = true; return; }
   box.hidden = false;
-  box.innerHTML = `<div class="hhead"><h3>Income vs spending</h3><button class="plain" data-act="report" data-r="flow">Details</button></div>
+  box.innerHTML = `<div class="hhead"><h2>Income vs spending</h2><button class="plain" data-act="report" data-r="flow">Details</button></div>
     ${flowStats(d)}${legendHTML([[d.useSal ? 'Income (dashed: avg salary)' : 'Income (dashed: average)', 'var(--blue)'], ['Spent (dashed: average)', 'var(--red)']])}
     <button class="flowfigbtn" data-act="report" data-r="flow" aria-label="Open income vs spending details"><svg class="flowfig" aria-hidden="true"></svg></button>
     <p class="muted flowfoot">Averages use the last ${d.done.length} finished month${d.done.length === 1 ? '' : 's'}${insTr ? '; money you moved to savings counts as kept, not spent' : '; transfers are left out'}.</p>`;
@@ -3051,7 +3014,7 @@ function potShotReview(p, rows, totals) {
   deps.filter(r => !r.done).forEach(r => out.push({type: 'add', date: r.date, a: r.a, ref: r.ref, period: r.period, approx: r.approx, cutAmt: r.cutAmt, on: true}));
   // 5) in Pera but not on the statement, within the dates the screenshots cover → probably remove
   const ds = stmt.map(r => r.date).filter(Boolean).sort(), lo = ds[0], hi = ds[ds.length - 1];
-  if (lo) have.filter(x => !x.used && x.d.date >= lo && x.d.date <= hi && x.d.date <= todayIso()).forEach(x => out.push({type: 'del', dep: x.d, date: x.d.date, a: x.d.a, on: true}));
+  if (lo) have.filter(x => !x.used && x.d.date >= lo && x.d.date <= hi && x.d.date <= todayIso()).forEach(x => out.push({type: 'del', dep: x.d, date: x.d.date, a: x.d.a, on: false}));   // deleting is opt-in
   // interest the bank paid (time deposits) / MP2 dividends
   stmt.filter(r => r.kind === 'int').forEach(r => {
     if (p.kind !== 'td') return;
@@ -3088,8 +3051,8 @@ function renderPotShot() {
   const stmtTot = totals.saving;
   box.innerHTML = `<p class="muted">Compared with <b>${esc(p.name)}</b>: ${ok} line${ok === 1 ? '' : 's'} already match${ok === 1 ? 'es' : ''}${ch.length ? `, ${ch.length} to fix or add` : ', nothing to change'}. Untick anything you don’t want.</p>
     ${ch.length ? `<ul class="list implist">${ch.map(line).join('')}</ul>` : '<p class="empty">Everything on the screenshot is already in Pera ✓</p>'}
-    ${ch.some(r => r.approx) ? '<p class="muted">≈ The date was cut off or relative (“2 days ago”), so it’s left unticked when fixing. Check it before ticking.</p>' : ''}
-    ${ch.some(r => r.type === 'del') ? '<p class="muted">“Remove” lists entries in Pera within the screenshot’s dates that the statement doesn’t show. Untick any that are just outside what the screenshot covers.</p>' : ''}
+    ${ch.some(r => r.approx) ? '<p class="muted">≈ Approximate date: it was cut off, or written like “2 days ago” (counted from <b>today</b>, so it’s wrong if the screenshot is older). These are left unticked; check the date before ticking.</p>' : ''}
+    ${ch.some(r => r.type === 'del') ? '<p class="muted">“Remove” lists entries in Pera within the screenshot’s dates that the statement doesn’t show. They’re unticked: tick only the ones you’re sure are wrong, since a screenshot may not show every transaction.</p>' : ''}
     ${stmtTot != null ? `<p class="stalenote">Statement says total savings <b>${esc(peso(stmtTot, 2))}</b>. Pera will compare after saving.</p>` : ''}
     ${ch.length ? `<button class="go" data-act="pshot-go" ${on.length ? '' : 'disabled'}>${on.length ? `Apply ${on.length} change${on.length === 1 ? '' : 's'}` : 'Nothing ticked'}</button>` : ''}`;
 }

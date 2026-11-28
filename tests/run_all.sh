@@ -13,4 +13,6 @@ for t in test_*.py; do
     echo "FAIL"; echo "$out" | grep -E 'Error|errors|Traceback' | head -5 | sed 's/^/    /'; fail=1
   else echo "ok"; fi
 done
+printf '%-45s' "test_money.js (maths, no browser)"
+if out=$(node test_money.js 2>&1); then echo ok; else echo FAIL; echo "$out" | grep -v '  ok' | head -5 | sed 's/^/    /'; fail=1; fi
 exit $fail

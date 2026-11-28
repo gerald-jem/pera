@@ -58,11 +58,11 @@ async def main():
     await ph.locator('#hSum').screenshot(path=OUT+'/ai_rewriting.png'); await ph.wait_for_timeout(1500); print('rewritten toast:', await ph.inner_text('#toastMsg'))
     print('summary:', (await ph.inner_text('#hSum')).replace('\n',' | ')[:200]); await ph.locator('#hSum').screenshot(path=OUT+'/ai_summary.png')
     # cards on other tabs
-    await ph.click('.tab[data-v=savings]'); await ph.wait_for_timeout(500); print('savings card:', await ph.locator('#v-savings .aicard h3').all_inner_texts())
+    await ph.click('.tab[data-v=savings]'); await ph.wait_for_timeout(500); print('savings card:', await ph.locator('#v-savings .aicard h2').all_inner_texts())
     await ph.click('#v-savings [data-act=ai-card]'); await ph.wait_for_timeout(1800); print('savings written:', (await ph.inner_text('#v-savings .aicard .aitext')).replace('\n',' | '))
-    await ph.click('.tab[data-v=bills]'); await ph.wait_for_timeout(500); print('bills card:', await ph.locator('#billAI .aicard h3').all_inner_texts())
+    await ph.click('.tab[data-v=bills]'); await ph.wait_for_timeout(500); print('bills card:', await ph.locator('#billAI .aicard h2').all_inner_texts())
     await ph.click('.tab[data-v=months]'); await ph.wait_for_timeout(400); await ph.locator('#monthList li:has-text("October") button').first.click(); await ph.wait_for_timeout(500)
-    print('month card:', await ph.locator('#sheetBody .aicard h3').all_inner_texts()); await ph.screenshot(path=OUT+'/ai_monthcard.png'); await ph.keyboard.press('Escape'); await ph.wait_for_timeout(300)
+    print('month card:', await ph.locator('#sheetBody .aicard h2').all_inner_texts()); await ph.screenshot(path=OUT+'/ai_monthcard.png'); await ph.keyboard.press('Escape'); await ph.wait_for_timeout(300)
     await ph.click('.tab[data-v=home]'); await ph.wait_for_timeout(500)
     # sort my spending
     await ph.click('[data-act=sort-spend]'); await ph.wait_for_timeout(900)
