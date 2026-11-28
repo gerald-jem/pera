@@ -406,7 +406,7 @@ function entryRow(t, x, y, i) {
     const inc = t === 'inc';
     return `<li><button class="rowbtn" data-act="edit-entry" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}">
       <span class="dot ${inc ? 'i' : 'e'}">${inc ? '↓' : '↑'}</span>
-      <span class="t">${esc(x.n || (inc ? 'Income' : 'Expense'))}<small>${inc ? 'Received' : x.a < 0 ? 'Refund / adjustment' : (() => { const c = x.c || catOf(x.n || ''); return `<b class="catdot2" style="background:${catCol(c)}"></b>${esc(c)}`; })()}</small></span>
+      <span class="t">${esc(showName(x.n) || (inc ? 'Income' : 'Expense'))}<small>${inc ? 'Received' : x.a < 0 ? 'Refund / adjustment' : (() => { const c = x.c || catOf(x.n || ''); return `<b class="catdot2" style="background:${catCol(c)}"></b>${esc(c)}`; })()}</small></span>
       <span class="amt ${inc ? 'up' : ''}">${inc ? '+' : x.a < 0 ? '+' : '−'}${esc(peso(Math.abs(x.a), 2))}</span></button>
       <button class="x" data-act="entry-del" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}" aria-label="Delete ${esc(x.n || (inc ? 'income' : 'expense'))}">×</button></li>`;
   }
@@ -896,9 +896,9 @@ function bindGoalForm(g) {
     if (isNew) toast(`${name} added`, () => { S.meta.goals = before; commit('meta'); closeSheet(); });
   });
 }
-function goalNew() {
+function goalNew(target) {
   openSheet(`<div data-goal="new"><div class="sheethead"><h2>New goal</h2><button class="ghost" data-act="close">Cancel</button></div>
-    <p class="muted">Tell Pera how much and either when or how much a month. It does the rest.</p>${goalForm({from: pots().length ? 'all' : 'none'})}</div>`);
+    <p class="muted">Tell Pera how much and either when or how much a month. It does the rest.</p>${goalForm({from: pots().length ? 'all' : 'none', target})}</div>`);
   bindGoalForm({}); setTimeout(() => $('gN').focus(), 50);
 }
 /* ---- pot sheet ---- */
@@ -1402,7 +1402,7 @@ function aiqText(st) {
 // fingerprint of the numbers the AI sees, so a write-up can tell when it's outdated (the date line is left out)
 let fpCache = {v: -1, fp: ''};
 function dataFP() {
-  if (fpCache.v !== dataVer) { const t = aiContext().split('\n').slice(1).join('\n'); let h = 5381; for (let k = 0; k < t.length; k++) h = ((h << 5) + h + t.charCodeAt(k)) | 0; fpCache = {v: dataVer, fp: (h >>> 0).toString(36)}; }
+  if (fpCache.v !== dataVer) { const t = aiContext().split('\n').slice(1).join('\n').toLowerCase(); let h = 5381; for (let k = 0; k < t.length; k++) h = ((h << 5) + h + t.charCodeAt(k)) | 0; fpCache = {v: dataVer, fp: (h >>> 0).toString(36)}; }
   return fpCache.fp;
 }
 // streamed answer: calls onText(textSoFar) as words arrive; works with the older non-streaming function too
@@ -1453,7 +1453,7 @@ async function ai(task, payload) {
 const aiJSON = async (task, payload) => { const t = await ai(task, {...payload, json: true}); try { return JSON.parse(t); } catch { const m = t.match(/[\[{][\s\S]*[\]}]/); if (m) return JSON.parse(m[0]); throw new Error('The AI answer couldn’t be read. Try again.'); } };
 // plain text from the AI → safe HTML (escape first, then **bold**, bullet lines, paragraphs)
 function aiHTML(t) {
-  const lines = esc(String(t).trim()).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').split(/\n/);
+  const lines = esc(String(t).trim()).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|[\s(])\*(?!\s)([^*\n]+?)\*(?=[\s).,!?]|$)/g, '$1<i>$2</i>').split(/\n/);
   let h = '', inList = false;
   for (const l of lines) {
     const m = /^\s*(?:[-*•]|\d+[.)])\s+(.*)/.exec(l);
@@ -1471,8 +1471,18 @@ function aiContext(opts = {}) {
   ser.slice(-18).forEach(p => L.push(`${p.y}-${String(p.i + 1).padStart(2, '0')}${p.now ? ' (this month, so far)' : p.past ? '' : ' (planned)'}: ${Math.round(p.inc)} | ${Math.round(p.exp)} | ${Math.round(p.sav)} | ${Math.round(p.total)}`));
   L.push('Spending by category per month (transfers between own accounts left out):');
   lastMonths(6).forEach(m => { const by = {}; spendingIn([m]).forEach(r => { if (r.cat !== 'Transfers') by[r.cat] = (by[r.cat] || 0) + r.a; }); L.push(`${m.y}-${String(m.i + 1).padStart(2, '0')}: ${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([c, v]) => `${c} ${Math.round(v)}`).join(', ') || 'none'}`); });
-  const un = (S.meta.bills || []).filter(b => !b.paid && b.due && b.due >= todayIso()).sort((a, b) => a.due.localeCompare(b.due));
-  L.push(`Unpaid upcoming bills: ${un.length ? un.map(b => { const m = billMonth(b.due); return `${b.name} ${(+b.a).toFixed(2)} due ${b.due} (counted in ${m.y}-${String(m.i + 1).padStart(2, '0')})`; }).join('; ') : 'none'}`);
+  // bills: exact totals worked out here so the AI doesn't add them up itself, plus which payday pays each one
+  const un = (S.meta.bills || []).filter(b => !b.paid && b.due).sort((a, b) => a.due.localeCompare(b.due) || a.name.localeCompare(b.name) || a.a - b.a), ymS = m => `${m.y}-${String(m.i + 1).padStart(2, '0')}`;
+  const payFrom = due => { const d = new Date(due + 'T00:00'), y = d.getFullYear(), mo = d.getMonth(), last = new Date(y, mo + 1, 0).getDate(), p30 = Math.min(30, last);
+    const pick = d.getDate() >= p30 ? new Date(y, mo, p30) : d.getDate() >= 15 ? new Date(y, mo, 15) : new Date(y, mo, Math.min(30, new Date(y, mo, 0).getDate()) - new Date(y, mo, 0).getDate()) ;
+    return `${pick.getFullYear()}-${String(pick.getMonth() + 1).padStart(2, '0')}-${String(pick.getDate()).padStart(2, '0')}`; };
+  if (un.length) {
+    const byM = {}, byPay = {}; un.forEach(b => { const k = ymS(billMonth(b.due)), pf = payFrom(b.due); byM[k] = (byM[k] || 0) + +b.a; byPay[pf] = (byPay[pf] || 0) + +b.a; });
+    L.push(`Unpaid bills total (exact, use as is): ${(un.reduce((t, b) => t + +b.a, 0)).toFixed(2)} across ${un.length} payments, last one due ${un[un.length - 1].due}.`);
+    L.push(`Unpaid bills by the month they count in: ${Object.entries(byM).map(([k, v]) => `${k} ${v.toFixed(2)}`).join('; ')}`);
+    L.push(`Unpaid bills by the payday that pays them (the last payday on or before the due date): ${Object.entries(byPay).map(([k, v]) => `${k} payday ${v.toFixed(2)}`).join('; ')}`);
+  }
+  L.push(`Unpaid bills: ${un.length ? un.map(b => `${b.name} ${(+b.a).toFixed(2)} due ${b.due}${b.due < todayIso() ? ' (overdue)' : ''} (counts in ${ymS(billMonth(b.due))}, paid from the ${payFrom(b.due)} payday)`).join('; ') : 'none'}`);
   const ps = pots(); if (ps.length) L.push(`Savings accounts: ${ps.map(p => `${p.name} (${p.kind === 'td' ? 'time deposit' : p.kind === 'mp2' ? 'Pag-IBIG MP2' : 'savings account'}) ${Math.round(potNow(p))} now, ${(netRate(p) * 100).toFixed(2)}%/yr after tax`).join('; ')}`);
   const gs = goals(); if (gs.length) L.push(`Goals: ${gs.map(g => { const c = goalCalc(g); return `${g.name}: ${Math.round(c.cur)} of ${Math.round(c.target)}${g.by ? `, wants it by ${g.by} (needs ${Math.round(c.need || 0)}/month)` : ''}`; }).join('; ')}`);
   const h = habits(); if (h.n) L.push(`Last ${h.n} finished months on average: saved ${Math.round(h.save)}/month, left over after spending and saving ${Math.round(h.left)}/month.`);
@@ -1485,13 +1495,32 @@ function aiContext(opts = {}) {
   return L.join('\n');
 }
 const AI_RULES = 'You are Pera, a friendly money helper inside a personal finance app for someone in the Philippines. Use only the data given; when it doesn’t cover something, say so plainly. Show peso amounts like ₱1,234. Be brief and concrete: lead with the answer, then a few short lines or bullets. "No description" means spending recorded without a note, mostly from an old spreadsheet. Only when the person asks about investing, taxes or legal matters, give general information and suggest checking with a licensed professional; never add that note otherwise.';
+const FOLLOW_RULE = '\n\nAfter the answer, on its own last line, write ">>" followed by 2 or 3 short follow-up questions the person might tap next, in their voice, separated by " | " (each under 45 characters, about their own money, answerable from the data). Example: >> How much should I save each payday? | What if I save ₱25,000 a month?';
+// split an answer into the text to show and the follow-up suggestions (also hides a half-written ">>" line while streaming)
+function splitFollow(t) {
+  const k = t.search(/\n?\s*>>/); if (k < 0) return {text: t.replace(/\n\s*>?\s*$/, ''), sugg: []};
+  return {text: t.slice(0, k).trimEnd(), sugg: t.slice(k).replace(/^\s*>>\s*/, '').split('|').map(x => x.trim().replace(/^["“]|["”]$/g, '')).filter(x => x && x.length < 70).slice(0, 3)};
+}
+// a peso amount in what the person typed (500k, ₱1.2m, 250,000)
+function amtIn(q) {
+  const m = /(?:₱|php|p)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\b/i.exec(q); if (!m) return 0;
+  const v = parseFloat(m[1].replace(/,/g, '')) * ({k: 1e3, thousand: 1e3, m: 1e6, million: 1e6}[(m[2] || '').toLowerCase()] || 1);
+  return v >= 1000 ? Math.round(v) : 0;
+}
+// starter questions that fit the data (no goal yet → ask about one)
+function starterQs() {
+  const last = lastMonths(2)[0], mn = last ? new Date(last.y, last.i).toLocaleDateString('en-PH', {month: 'long'}) : 'last month';
+  const top = last ? Object.entries(spendingIn([last]).reduce((o, r) => (!['Transfers', 'Other', 'No description'].includes(r.cat) && (o[r.cat] = (o[r.cat] || 0) + r.a), o), {})).sort((a, b) => b[1] - a[1])[0] : null;
+  return [top ? `How much did I spend on ${top[0].toLowerCase()} in ${mn}?` : 'How much did I spend last month?', 'Where can I cut back?',
+    goals().length ? `When will I reach ${goals()[0].name}?` : 'How long to save ₱500,000?', (S.meta.bills || []).some(b => !b.paid) ? 'What bills are coming up?' : 'How much can I save each payday?'];
+}
 
 /* ---- Ask Pera: chat about your money ---- */
 let chat = [];
 function askSheet() {
   openSheet(`<div class="sheethead"><h2>Ask Pera</h2><button type="button" class="ghost" data-act="close">Done</button></div>
     <div class="chat" id="chatLog" aria-live="polite">${chat.length ? '' : `<p class="muted">Ask anything about your money. Pera sends a summary of your numbers to Google Gemini to answer.</p>`}</div>
-    <div class="chips aisugg" id="chatSugg">${chat.length ? '' : ['How much did I spend on food last month?', 'Where can I cut back?', 'Can I afford ₱30,000 in February?', 'When will I reach my goal?', 'What bills are coming up?'].map(q => `<button class="chip" data-act="ask-q" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+    <div class="chips aisugg" id="chatSugg"></div>
     <form id="chatF" class="chatf" novalidate><input id="chatQ" autocomplete="off" enterkeyhint="send" placeholder="Ask about your money…" aria-label="Your question"><button class="go" type="submit" aria-label="Send">${SPARK}</button></form>`);
   $('sheet').classList.add('tall'); paintChat();
   $('chatF').addEventListener('submit', e => { e.preventDefault(); const q = $('chatQ').value.trim(); if (q) { $('chatQ').value = ''; askPera(q); } });
@@ -1503,9 +1532,22 @@ function paintChat(thinking) {
   const log = $('chatLog'); if (!log) return;
   const secs = chatBusy ? Math.round((Date.now() - chatBusy) / 1000) : 0;
   if (chat.length) log.innerHTML = chat.map((m, k) => m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>`
-    : `<div class="msg ai${m.err ? ' err' : ''}">${m.err ? `${esc(m.text)}${k === chat.length - 1 && !chatBusy ? '<br><button class="retry" data-act="ask-retry">Try again</button>' : ''}` : aiHTML(m.text)}${m.cached && k === chat.length - 1 ? `<p class="cachednote">Saved answer · your numbers haven’t changed since. <button class="linkbtn" data-act="ask-fresh">Ask again</button></p>` : ''}</div>`).join('')
+    : `<div class="msg ai${m.err ? ' err' : ''}">${m.err ? `${esc(m.text)}${k === chat.length - 1 && !chatBusy ? '<br><button class="retry" data-act="ask-retry">Try again</button>' : ''}` : aiHTML(splitFollow(m.text).text)}${m.cached && k === chat.length - 1 ? `<p class="cachednote">Saved answer · your numbers haven’t changed since. <button class="linkbtn" data-act="ask-fresh">Ask again</button></p>` : ''}</div>`).join('')
     + (thinking ? `<div class="msg ai thinking"><i></i><i></i><i></i>${aiqText(chatState) ? `<span>${esc(aiqText(chatState))}</span>` : secs >= 4 ? `<span>Thinking… ${secs}s</span>` : ''}</div>` : '');
-  const sg = $('chatSugg'); if (sg && chat.length) sg.innerHTML = '';
+  const sg = $('chatSugg');
+  if (sg) {
+    const last = chat[chat.length - 1], busy = thinking || chatBusy || (last && last.live);
+    let qs = [], extra = '';
+    if (!chat.length) qs = starterQs();
+    else if (!busy && last.role === 'model' && !last.err) {
+      qs = splitFollow(last.text).sugg;
+      // they named a target and have no goal for it → offer to save it
+      const amt = [...chat].reverse().filter(m => m.role === 'user').slice(0, 2).map(m => amtIn(m.text)).find(Boolean);
+      if (amt && /goal|reach|save|saving|target/i.test(chat.map(m => m.text).join(' ')) && !goals().some(g => Math.abs(+g.target - amt) < 1))
+        extra = `<button class="chip act" data-act="ask-goal" data-a="${amt}">＋ Save ${esc(peso(amt))} as a goal</button>`;
+    }
+    sg.innerHTML = extra + qs.map(q => `<button class="chip" data-act="ask-q" data-q="${esc(q)}">${esc(q)}</button>`).join('');
+  }
   log.scrollIntoView({block: 'end'}); $('sheet').scrollTop = $('sheet').scrollHeight;
 }
 async function askPera(q, again, fresh) {
@@ -1519,7 +1561,7 @@ async function askPera(q, again, fresh) {
   const needRows = /\b(spent|spend|spending|bought|paid|grab|jollibee|shopee|lazada|food|transaction|entry|entries|where|which|list|biggest|most|cut|save|saving|savings|improve)/i.test(q);
   const msgs = chat.filter(m => !m.err).slice(-12).map(m => ({role: m.role, text: m.text})), live = {role: 'model', text: '', live: true};
   try {
-    const text = await aiQueue('Ask Pera', job => aiStream('ask', {system: AI_RULES + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: msgs, maxTokens: 1200, think: 'low'}, t => {
+    const text = await aiQueue('Ask Pera', job => aiStream('ask', {system: AI_RULES + FOLLOW_RULE + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: msgs, maxTokens: 1200, think: 'low'}, t => {
       job.partial = true; chatState = null;
       if (!chat.includes(live)) chat.push(live);
       live.text = t; paintChat();
@@ -1582,7 +1624,7 @@ function aiSpec(id) {
   if (kind === 'savings') return {id, key: `sav:${ym()}`, title: 'Savings check-in', intro: 'Where your savings and goals stand, whether your pace gets you there, and what to do next.',
     prompt: () => `Data:\n${aiContext()}\n\nWrite a savings check-in in under 110 words: one line on total savings now and how it grew; a bullet per goal (or per account if there are no goals) saying if the current pace reaches it on time, with peso amounts; then one concrete next step, like how much to move on each payday (15th and 30th). ${NO_FLUFF}`};
   if (kind === 'bills') return {id, key: `bills:${ym()}`, title: 'Bills plan', intro: 'What your upcoming bills mean for each payday, and when you’ll be clear of them.',
-    prompt: () => `Data:\n${aiContext()}\n\nWrite a bills plan in under 110 words: total still owed and when the last one ends; bullets for the heaviest upcoming month(s) with how much to set aside from each payday (15th and 30th) to cover them; then one tip to get clear sooner or avoid piling up more PayLater. ${NO_FLUFF}`};
+    prompt: () => `Data:\n${aiContext()}\n\nWrite a bills plan in under 110 words: total still owed and when the last one ends (use the exact totals given, don’t add them up yourself); bullets for the heaviest upcoming month(s) with how much to set aside from each payday, using the payday each bill is paid from (a bill isn’t split across paydays that come after its due date); then one tip to get clear sooner or avoid piling up more PayLater. ${NO_FLUFF}`};
   return null;
 }
 const aiWriting = {};   // key → {text} while a card is being written
@@ -1600,7 +1642,7 @@ function resumeAiCards() { pendingCards().forEach(id => writeAiCard(id)); }
 function aiCardHTML(id, extraClass = 'hcard') {
   const sp = aiSpec(id); if (!sp) return '';
   const saved = aiSaved(sp.key), w = aiWriting[sp.key], dots = '<div class="msg ai thinking" aria-label="Writing"><i></i><i></i><i></i></div>';
-  const wait = w && aiqText(w.st), stale = saved && saved.fp && saved.fp !== dataFP();
+  const wait = w && aiqText(w.st), stale = saved && saved.fp !== dataFP();
   const btn = w ? `<span class="aiwriting"><span class="spin" aria-hidden="true"></span>${wait ? 'Waiting…' : 'Writing…'}</span>` : saved ? `<button class="plain" data-act="ai-card" data-id="${esc(id)}">Rewrite</button>` : '';
   const body = w ? (w.text ? `<div class="aitext">${aiHTML(w.text)}</div>` : `${saved ? `<div class="aitext faded">${aiHTML(saved.text)}</div>` : ''}${dots}`) + `<p class="muted aifoot">${esc(wait || 'Writing a fresh one…')}</p>`
     : saved ? `<div class="aitext">${aiHTML(saved.text)}</div>${stale ? `<p class="stalenote">Your numbers changed since this was written. <button class="linkbtn" data-act="ai-card" data-id="${esc(id)}">Rewrite</button></p>` : ''}<p class="muted aifoot">Written by AI ${esc(new Date(saved.at).toLocaleDateString('en-PH', {month: 'short', day: 'numeric'}))} · double-check the numbers</p>`
@@ -1924,6 +1966,8 @@ const title = t => ({inc: 'income', exp: 'expense', sav: 'savings'}[t]);
 
 // your most used notes for one-tap shortcuts (last 4 months, used at least twice)
 // your most used payees for one-tap shortcuts (last 4 months, used at least twice), with clean names
+// bank reference text shown in a readable way (the saved note isn't changed): "VISAE CV_072425_767030_LAZADA" → "Lazada refund"
+const showName = n => { const m = /^\s*VISAE?\s+CV_\d+_\d+_([A-Z0-9 ]+)\s*$/i.exec(n || ''); return m ? m[1].trim().toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) + ' refund' : n; };
 const INC_NAMES = [['Salary', /inrem|payroll|salary|sahod|sweldo/i], ['Interest', /interest/i], ['Cashback', /cashback|rebate/i], ['Refund', /refund|reversal/i]];
 const niceName = (n, t) => { if (t === 'inc') { const h = INC_NAMES.find(([, re]) => re.test(n)); if (h) return h[0]; } return merchantOf(n) || n; };
 function frequent(t) {
@@ -2960,6 +3004,7 @@ document.addEventListener('click', e => {
     case 'search': return searchSheet();
     case 'ask': return askSheet();
     case 'ask-q': return askPera(d.q);
+    case 'ask-goal': return goalNew(+d.a);
     case 'ask-fresh': { const m = chat[chat.length - 1]; if (m && m.cached) chat.pop(); const last = [...chat].reverse().find(x => x.role === 'user'); if (last) askPera(last.text, true, true); return; }
     case 'ask-retry': { const last = [...chat].reverse().find(m => m.role === 'user'); if (chat.length && chat[chat.length - 1].err) chat.pop(); if (last) askPera(last.text, true); return; }
     case 'sort-spend': return sortSpending();
@@ -3073,6 +3118,7 @@ $('qbMode').addEventListener('click', () => setQbMode(qbMode === 'pick' ? 'type'
 $('qbForm').addEventListener('submit', e => { e.preventDefault(); quickAdd(); });
 fillPicker(); setQbMode(qbMode);
 $('settingsBtn').dataset.act = 'settings';
+addEventListener('scroll', () => { const h = document.querySelector('header.top'); if (h) h.classList.toggle('scrolled', scrollY > 4); }, {passive: true});
 
 document.addEventListener('keydown', e => {
   if (e.key.toLowerCase() !== 'n' || e.metaKey || e.ctrlKey || e.altKey || sheetOpen || !user) return;

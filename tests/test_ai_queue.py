@@ -46,10 +46,10 @@ async def main():
     print('stale after change:', await ph.locator('#hSum .stalenote').count(), '|', (await ph.inner_text('#hSum .stalenote')) if await ph.locator('#hSum .stalenote').count() else '')
     await ph.locator('#hSum').screenshot(path=OUT+'/ai_stale.png')
     # 5. chat cache
-    n0=AI['calls']; await ph.click('[data-act=ask]'); await ph.wait_for_timeout(300); await ph.click('[data-act=ask-q] >> nth=4'); await ph.wait_for_timeout(1200)
+    n0=AI['calls']; await ph.click('[data-act=ask]'); await ph.wait_for_timeout(300); await ph.click('[data-act=ask-q] >> nth=3'); await ph.wait_for_timeout(1200)
     await ph.click('[data-act=close]'); await ph.wait_for_timeout(300)
     await ph.evaluate("()=>{}"); await ph.reload(); await ph.wait_for_timeout(1200)
-    await ph.click('[data-act=ask]'); await ph.wait_for_timeout(300); t0=time.time(); await ph.click('[data-act=ask-q] >> nth=4'); await ph.wait_for_timeout(150)
+    await ph.click('[data-act=ask]'); await ph.wait_for_timeout(300); t0=time.time(); await ph.click('[data-act=ask-q] >> nth=3'); await ph.wait_for_timeout(150)
     print('repeat question: instant =', await ph.locator('.cachednote').count()==1, '| calls made for both asks:', AI['calls']-n0, '|', await ph.inner_text('.cachednote'))
     await ph.click('[data-act=ask-fresh]'); await ph.wait_for_timeout(1200); print('ask again → new call:', AI['calls']-n0, '| note gone:', await ph.locator('.cachednote').count()==0)
     await ph.click('[data-act=close]'); await ph.wait_for_timeout(300)
