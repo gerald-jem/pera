@@ -62,7 +62,8 @@ const kDirty = () => 'pera:dirty:' + user.id;
 const kBase = () => 'pera:base:' + user.id;      // last copy agreed with the server, per doc
 const kSnaps = () => 'pera:snaps:' + user.id;    // safety copies kept on this device
 let base = {};
-function saveLocal() { store.set(kData(), S); store.set(kDirty(), [...dirty]); store.set(kBase(), base); }
+let dataVer = 0;
+function saveLocal() { dataVer++; store.set(kData(), S); store.set(kDirty(), [...dirty]); store.set(kBase(), base); }
 function loadLocal() {
   const d = store.get(kData()); S = d && d.meta ? d : blank();
   dirty = new Set(store.get(kDirty()) || []);
@@ -1355,6 +1356,55 @@ function aiError(msg, status) {
   if (status === 404 || /requested function was not found|function not found/i.test(msg)) { aiOk = false; store.set('pera:aiOk', false); return 'Pera AI isn’t set up yet. See Settings → Pera AI.'; }
   return msg;
 }
+/* ---- AI queue: one request at a time, a short gap between them (free-tier limits),
+   and automatic retries when Gemini is busy, rate-limited or the phone is offline ---- */
+const AIQ = [], AI_GAP = 1500, AI_BACKOFF = [5, 15, 30, 60, 60];
+let aiqBusy = false, aiqLast = 0, aiqTimer = null;
+const retryable = m => /busy|free limit|took too long|couldn’t reach|offline|didn’t answer/i.test(m || '');
+function aiQueue(label, run, onState = () => {}) {
+  return new Promise((resolve, reject) => { AIQ.push({label, run, onState, tries: 0, waitUntil: 0, resolve, reject}); aiqNotify(); aiqPump(); });
+}
+function aiqNotify() {
+  AIQ.forEach((j, k) => {
+    if (j.running) return;
+    if (j.waitUntil > Date.now()) j.onState({state: 'retry', secs: Math.ceil((j.waitUntil - Date.now()) / 1000), msg: j.lastMsg, tries: j.tries});
+    else if (!navigator.onLine) j.onState({state: 'offline'});
+    else j.onState({state: 'queued', ahead: AIQ.slice(0, k).length});
+  });
+}
+async function aiqPump() {
+  clearTimeout(aiqTimer);
+  if (aiqBusy || !AIQ.length) return;
+  const now = Date.now(), job = AIQ.find(j => j.waitUntil <= now);
+  if (!job) { aiqTimer = setTimeout(aiqPump, Math.min(...AIQ.map(j => j.waitUntil)) - now); return; }
+  if (!navigator.onLine) { aiqNotify(); return; }   // the 'online' event starts it again
+  const gap = aiqLast + AI_GAP - now; if (gap > 0) { aiqTimer = setTimeout(aiqPump, gap); return; }
+  aiqBusy = true; job.running = true; aiqLast = Date.now(); job.onState({state: 'running'});
+  try { const v = await job.run(job); AIQ.splice(AIQ.indexOf(job), 1); job.resolve(v); }
+  catch (e) {
+    job.running = false;
+    if (retryable(e.message) && !job.partial && job.tries < AI_BACKOFF.length) { job.lastMsg = e.message; job.waitUntil = Date.now() + AI_BACKOFF[job.tries++] * 1000; }
+    else { AIQ.splice(AIQ.indexOf(job), 1); job.reject(e); }
+  }
+  aiqBusy = false; aiqNotify(); aiqPump();
+}
+addEventListener('online', () => { aiqNotify(); aiqPump(); });
+addEventListener('offline', aiqNotify);
+setInterval(() => { if (AIQ.some(j => !j.running && j.waitUntil > Date.now())) aiqNotify(); }, 1000);   // countdowns
+// a line of status text for a waiting request
+function aiqText(st) {
+  if (!st) return '';
+  if (st.state === 'offline') return 'Waiting for internet… it’ll continue when you’re back online.';
+  if (st.state === 'retry') return `${/free limit/i.test(st.msg) ? 'Gemini’s free limit is reached' : 'Gemini is busy'} · trying again in ${st.secs}s (try ${st.tries + 1} of ${AI_BACKOFF.length + 1})`;
+  if (st.state === 'queued' && st.ahead) return `Waiting in line (${st.ahead} ahead)…`;
+  return '';
+}
+// fingerprint of the numbers the AI sees, so a write-up can tell when it's outdated (the date line is left out)
+let fpCache = {v: -1, fp: ''};
+function dataFP() {
+  if (fpCache.v !== dataVer) { const t = aiContext().split('\n').slice(1).join('\n'); let h = 5381; for (let k = 0; k < t.length; k++) h = ((h << 5) + h + t.charCodeAt(k)) | 0; fpCache = {v: dataVer, fp: (h >>> 0).toString(36)}; }
+  return fpCache.fp;
+}
 // streamed answer: calls onText(textSoFar) as words arrive; works with the older non-streaming function too
 async function aiStream(task, payload, onText) {
   if (!sb || !user) throw new Error('Sign in first.');
@@ -1447,30 +1497,36 @@ function askSheet() {
   $('chatF').addEventListener('submit', e => { e.preventDefault(); const q = $('chatQ').value.trim(); if (q) { $('chatQ').value = ''; askPera(q); } });
   setTimeout(() => $('chatQ') && $('chatQ').focus(), 80);
 }
-let chatBusy = 0, chatTick = null;
+let chatBusy = 0, chatTick = null, chatState = null;
+const ASKC = 'pera:askCache', askKey = q => q.toLowerCase().replace(/[^a-z0-9₱]+/g, ' ').trim() + '|' + dataFP();
 function paintChat(thinking) {
   const log = $('chatLog'); if (!log) return;
   const secs = chatBusy ? Math.round((Date.now() - chatBusy) / 1000) : 0;
   if (chat.length) log.innerHTML = chat.map((m, k) => m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>`
-    : `<div class="msg ai${m.err ? ' err' : ''}">${m.err ? `${esc(m.text)}${k === chat.length - 1 && !chatBusy ? '<br><button class="retry" data-act="ask-retry">Try again</button>' : ''}` : aiHTML(m.text)}</div>`).join('')
-    + (thinking ? `<div class="msg ai thinking"><i></i><i></i><i></i>${secs >= 4 ? `<span>Thinking… ${secs}s</span>` : ''}</div>` : '');
+    : `<div class="msg ai${m.err ? ' err' : ''}">${m.err ? `${esc(m.text)}${k === chat.length - 1 && !chatBusy ? '<br><button class="retry" data-act="ask-retry">Try again</button>' : ''}` : aiHTML(m.text)}${m.cached && k === chat.length - 1 ? `<p class="cachednote">Saved answer · your numbers haven’t changed since. <button class="linkbtn" data-act="ask-fresh">Ask again</button></p>` : ''}</div>`).join('')
+    + (thinking ? `<div class="msg ai thinking"><i></i><i></i><i></i>${aiqText(chatState) ? `<span>${esc(aiqText(chatState))}</span>` : secs >= 4 ? `<span>Thinking… ${secs}s</span>` : ''}</div>` : '');
   const sg = $('chatSugg'); if (sg && chat.length) sg.innerHTML = '';
   log.scrollIntoView({block: 'end'}); $('sheet').scrollTop = $('sheet').scrollHeight;
 }
-async function askPera(q, again) {
+async function askPera(q, again, fresh) {
   if (chatBusy) return;
   if (!again) chat.push({role: 'user', text: q});
+  // the same first question with unchanged numbers: show the saved answer instantly
+  const first = chat.filter(m => m.role === 'user').length === 1, ck = askKey(q), cache = store.get(ASKC) || {};
+  if (first && !fresh && cache[ck]) { chat.push({role: 'model', text: cache[ck].text, cached: true}); paintChat(); return; }
   chatBusy = Date.now(); paintChat(true);
   clearInterval(chatTick); chatTick = setInterval(() => { if (chatBusy && !chat.some(m => m.live)) paintChat(true); }, 1000);
   const needRows = /\b(spent|spend|spending|bought|paid|grab|jollibee|shopee|lazada|food|transaction|entry|entries|where|which|list|biggest|most|cut|save|saving|savings|improve)/i.test(q);
   const msgs = chat.filter(m => !m.err).slice(-12).map(m => ({role: m.role, text: m.text})), live = {role: 'model', text: '', live: true};
   try {
-    await aiStream('ask', {system: AI_RULES + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: msgs, maxTokens: 1200, think: 'low'}, t => {
+    const text = await aiQueue('Ask Pera', job => aiStream('ask', {system: AI_RULES + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: msgs, maxTokens: 1200, think: 'low'}, t => {
+      job.partial = true; chatState = null;
       if (!chat.includes(live)) chat.push(live);
       live.text = t; paintChat();
-    });
+    }), st => { chatState = st; if (!chat.includes(live)) paintChat(true); });
+    if (first) { const c = store.get(ASKC) || {}; c[ck] = {text, at: Date.now()}; const keys = Object.keys(c).sort((a, b) => c[b].at - c[a].at); keys.slice(30).forEach(k => delete c[k]); store.set(ASKC, c); }
   } catch (e) { if (chat.includes(live) && live.text) live.text += '\n\n(cut off — try again)'; else chat.push({role: 'model', text: e.message, err: true}); }
-  delete live.live; chatBusy = 0; clearInterval(chatTick); paintChat();
+  delete live.live; chatBusy = 0; chatState = null; clearInterval(chatTick); paintChat();
 }
 
 /* ---- Sort my spending: the AI suggests categories for bank text it can't place; you approve ---- */
@@ -1484,9 +1540,10 @@ async function sortSpending() {
   if (!notes.length) return;
   const cats = CAT_NAMES.filter(c => c !== 'No description');
   try {
-    const res = await aiJSON('sort', {system: AI_RULES, maxTokens: 4000, think: 'low',
+    const res = await aiQueue('Sort my spending', () => aiJSON('sort', {system: AI_RULES, maxTokens: 4000, think: 'low',
       messages: [{role: 'user', text: `Put each Philippine bank/e-wallet transaction note into one category: ${cats.join(', ')}. Use "Transfers" for moving money to the person's own accounts or other people (InstaPay/PESONet sends, "Sent to", "Transfer to"). Use "Other" only when nothing fits. Also give a short clean shop/payee name.\nNotes:\n${notes.map((n, k) => `${k + 1}. ${n}`).join('\n')}`}],
-      schema: {type: 'ARRAY', items: {type: 'OBJECT', properties: {n: {type: 'INTEGER'}, category: {type: 'STRING', enum: cats}, name: {type: 'STRING'}}, required: ['n', 'category']}}});
+      schema: {type: 'ARRAY', items: {type: 'OBJECT', properties: {n: {type: 'INTEGER'}, category: {type: 'STRING', enum: cats}, name: {type: 'STRING'}}, required: ['n', 'category']}}}),
+      st => { const p = $('sortBody') && $('sortBody').querySelector('p.muted'); if (p && aiqText(st)) p.textContent = aiqText(st); });
     sortSug = (Array.isArray(res) ? res : []).map(r => ({note: notes[r.n - 1], c: cats.includes(r.category) ? r.category : 'Other', name: r.name || '', on: r.category !== 'Other'})).filter(r => r.note);
     renderSort();
   } catch (e) { $('sortBody').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
@@ -1529,13 +1586,24 @@ function aiSpec(id) {
   return null;
 }
 const aiWriting = {};   // key → {text} while a card is being written
-const aiSaved = key => store.get('pera:ai:' + key) || (key.startsWith('sum:') ? store.get('pera:' + key) : null);
+// write-ups are kept with your synced data (one write serves every device); older ones may still be only on this device
+const aiSaved = key => ((S.meta.aiNotes || {})[key]) || store.get('pera:ai:' + key) || (key.startsWith('sum:') ? store.get('pera:' + key) : null);
+function saveAiNote(key, note) {
+  const all = {...(S.meta.aiNotes || {}), [key]: note}, keys = Object.keys(all).sort((a, b) => all[b].at - all[a].at);
+  keys.slice(30).forEach(k => delete all[k]);   // keep the 30 newest
+  S.meta.aiNotes = all; store.set('pera:ai:' + key, note); commit('meta');
+}
+const AIQ_KEY = 'pera:aiPending';
+const pendingCards = () => store.get(AIQ_KEY) || [];
+function setPending(id, on) { const l = pendingCards().filter(x => x !== id); if (on) l.push(id); store.set(AIQ_KEY, l); }
+function resumeAiCards() { pendingCards().forEach(id => writeAiCard(id)); }
 function aiCardHTML(id, extraClass = 'hcard') {
   const sp = aiSpec(id); if (!sp) return '';
   const saved = aiSaved(sp.key), w = aiWriting[sp.key], dots = '<div class="msg ai thinking" aria-label="Writing"><i></i><i></i><i></i></div>';
-  const btn = w ? `<span class="aiwriting"><span class="spin" aria-hidden="true"></span>Writing…</span>` : saved ? `<button class="plain" data-act="ai-card" data-id="${esc(id)}">Rewrite</button>` : '';
-  const body = w ? (w.text ? `<div class="aitext">${aiHTML(w.text)}</div>` : `${saved ? `<div class="aitext faded">${aiHTML(saved.text)}</div>` : ''}${dots}`) + '<p class="muted aifoot">Writing a fresh one…</p>'
-    : saved ? `<div class="aitext">${aiHTML(saved.text)}</div><p class="muted aifoot">Written by AI ${esc(new Date(saved.at).toLocaleDateString('en-PH', {month: 'short', day: 'numeric'}))} · double-check the numbers</p>`
+  const wait = w && aiqText(w.st), stale = saved && saved.fp && saved.fp !== dataFP();
+  const btn = w ? `<span class="aiwriting"><span class="spin" aria-hidden="true"></span>${wait ? 'Waiting…' : 'Writing…'}</span>` : saved ? `<button class="plain" data-act="ai-card" data-id="${esc(id)}">Rewrite</button>` : '';
+  const body = w ? (w.text ? `<div class="aitext">${aiHTML(w.text)}</div>` : `${saved ? `<div class="aitext faded">${aiHTML(saved.text)}</div>` : ''}${dots}`) + `<p class="muted aifoot">${esc(wait || 'Writing a fresh one…')}</p>`
+    : saved ? `<div class="aitext">${aiHTML(saved.text)}</div>${stale ? `<p class="stalenote">Your numbers changed since this was written. <button class="linkbtn" data-act="ai-card" data-id="${esc(id)}">Rewrite</button></p>` : ''}<p class="muted aifoot">Written by AI ${esc(new Date(saved.at).toLocaleDateString('en-PH', {month: 'short', day: 'numeric'}))} · double-check the numbers</p>`
     : `<p class="muted">${sp.intro} Uses Google Gemini.</p><button class="ghost wide" data-act="ai-card" data-id="${esc(id)}">${SPARK}Write it</button>`;
   return `<section class="${extraClass} aicard" data-aikey="${esc(sp.key)}" data-aiid="${esc(id)}" aria-busy="${!!w}"><div class="hhead"><h3><span class="sparkic">${SPARK}</span>${esc(sp.title)}</h3>${btn}</div>${body}</section>`;
 }
@@ -1547,13 +1615,15 @@ function paintAiCards(key) {
 }
 async function writeAiCard(id) {
   const sp = aiSpec(id); if (!sp || aiWriting[sp.key]) return;
-  aiWriting[sp.key] = {text: ''}; paintAiCards(sp.key);
-  const had = !!aiSaved(sp.key);
+  const w = aiWriting[sp.key] = {text: '', st: null}; paintAiCards(sp.key);
+  const had = !!aiSaved(sp.key); setPending(id, true);
   try {
-    const text = await aiStream('card', {system: AI_RULES, maxTokens: 900, think: 'low', messages: [{role: 'user', text: sp.prompt()}]}, t => { aiWriting[sp.key].text = t; paintAiCards(sp.key); });
-    store.set('pera:ai:' + sp.key, {text, at: Date.now()});
-    delete aiWriting[sp.key]; paintAiCards(sp.key); toast(had ? `${sp.title} rewritten` : `${sp.title} written`);
-  } catch (e) { delete aiWriting[sp.key]; paintAiCards(sp.key); toast(e.message); }
+    const text = await aiQueue(sp.title, job => aiStream('card', {system: AI_RULES, maxTokens: 900, think: 'low', messages: [{role: 'user', text: sp.prompt()}]}, t => { job.partial = true; w.st = null; w.text = t; paintAiCards(sp.key); }),
+      st => { w.st = st; if (!w.text) paintAiCards(sp.key); });
+    delete aiWriting[sp.key]; setPending(id, false);
+    saveAiNote(sp.key, {text, at: Date.now(), fp: dataFP()});
+    paintAiCards(sp.key); toast(had ? `${sp.title} rewritten` : `${sp.title} written`);
+  } catch (e) { delete aiWriting[sp.key]; setPending(id, false); paintAiCards(sp.key); toast(e.message); }
 }
 function homeSummary() {
   const box = $('hSum'); if (!box) return;
@@ -1575,8 +1645,9 @@ async function talkRead() {
   const out = $('talkOut'); out.innerHTML = '<div class="msg ai thinking"><i></i><i></i><i></i></div>';
   const cats = CAT_NAMES.filter(c => c !== 'No description'), bills = uniqNames([...(S.meta.bills || []).map(b => b.name), ...PRESETS]);
   try {
-    const res = await aiJSON('talk', {system: AI_RULES, maxTokens: 1500, think: 'low', messages: [{role: 'user', text: `Today is ${todayIso()}. Turn this into money entries. "exp" = money spent, "inc" = money received (salary, refunds, interest), "bill" = something to pay on a due date (PayLater, utilities, loans) — use these bill names when they match: ${bills.join(', ')}. Amounts: "25k" = 25000, "1.5k" = 1500. Dates as YYYY-MM-DD; "yesterday", weekdays and "on the 15th" are relative to today; when no date is given use today (for bills, the due date). For bills paid in installments, "payments" is how many months. Notes: short, readable, Title Case shop names.\nText: ${q}`}],
-      schema: {type: 'ARRAY', items: {type: 'OBJECT', properties: {type: {type: 'STRING', enum: ['exp', 'inc', 'bill']}, amount: {type: 'NUMBER'}, note: {type: 'STRING'}, date: {type: 'STRING'}, category: {type: 'STRING', enum: cats}, payments: {type: 'INTEGER'}}, required: ['type', 'amount', 'note', 'date']}}});
+    const res = await aiQueue('Add by talking', () => aiJSON('talk', {system: AI_RULES, maxTokens: 1500, think: 'low', messages: [{role: 'user', text: `Today is ${todayIso()}. Turn this into money entries. "exp" = money spent, "inc" = money received (salary, refunds, interest), "bill" = something to pay on a due date (PayLater, utilities, loans) — use these bill names when they match: ${bills.join(', ')}. Amounts: "25k" = 25000, "1.5k" = 1500. Dates as YYYY-MM-DD; "yesterday", weekdays and "on the 15th" are relative to today; when no date is given use today (for bills, the due date). For bills paid in installments, "payments" is how many months. Notes: short, readable, Title Case shop names.\nText: ${q}`}],
+      schema: {type: 'ARRAY', items: {type: 'OBJECT', properties: {type: {type: 'STRING', enum: ['exp', 'inc', 'bill']}, amount: {type: 'NUMBER'}, note: {type: 'STRING'}, date: {type: 'STRING'}, category: {type: 'STRING', enum: cats}, payments: {type: 'INTEGER'}}, required: ['type', 'amount', 'note', 'date']}}}),
+      st => { const o = $('talkOut'); if (o && aiqText(st)) o.innerHTML = `<div class="msg ai thinking"><i></i><i></i><i></i><span>${esc(aiqText(st))}</span></div>`; });
     talk = (Array.isArray(res) ? res : []).filter(r => r && +r.amount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(r.date)).map(r => ({...r, amount: Math.round(+r.amount * 100) / 100, payments: Math.max(1, Math.min(36, +r.payments || 1)), on: true}));
     renderTalk();
   } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
@@ -2889,6 +2960,7 @@ document.addEventListener('click', e => {
     case 'search': return searchSheet();
     case 'ask': return askSheet();
     case 'ask-q': return askPera(d.q);
+    case 'ask-fresh': { const m = chat[chat.length - 1]; if (m && m.cached) chat.pop(); const last = [...chat].reverse().find(x => x.role === 'user'); if (last) askPera(last.text, true, true); return; }
     case 'ask-retry': { const last = [...chat].reverse().find(m => m.role === 'user'); if (chat.length && chat[chat.length - 1].err) chat.pop(); if (last) askPera(last.text, true); return; }
     case 'sort-spend': return sortSpending();
     case 'sort-tog': { const r = sortSug && sortSug[+d.k]; if (r) { r.on = !r.on; renderSort(); } return; }
@@ -3129,6 +3201,7 @@ async function start(u) {
   const fresh = await pull();
   if (fresh) { purgeTrash(); purgeCycleTrash(); if (unifyBillNames()) dirty.add('meta'); if (migrateSavings()) dirty.add('meta'); saveLocal(); render(); }
   await push();
+  setTimeout(resumeAiCards, 1500);   // write-ups asked for before the app was closed
 }
 function stop(msg) { hideToast(); locked = false; $('lockScreen').hidden = true; document.documentElement.classList.remove('applock'); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
 
