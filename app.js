@@ -1565,20 +1565,22 @@ function planningLines(ser) {
   const avg = k => past.reduce((s, p) => s + p[k], 0) / past.length, inc = avg('inc'), spent = avg('spent'), saved = avg('sav');
   const f = flowData(6), t = today();
   const billsAhead = [1, 2, 3].map(n => { const d = new Date(t.getFullYear(), t.getMonth() + n, 1); return billsIn(String(d.getFullYear()), d.getMonth()).reduce((s, b) => s + +b.a, 0); });
-  const billsAvg = billsAhead.reduce((a, b) => a + b, 0) / 3, target = Math.max(inc * 0.2, saved), cap = Math.max(0, inc - target - billsAvg);
+  // plan on salary when Pera can tell it apart: refunds and money moved back from your own accounts aren't income to budget with
+  const base = f.useSal && f.aIn > 0 ? f.aIn : inc, baseName = f.useSal && f.aIn > 0 ? 'salary' : 'income';
+  const billsAvg = billsAhead.reduce((a, b) => a + b, 0) / 3, target = Math.max(base * 0.2, saved), cap = Math.max(0, base - target - billsAvg);
   const liquid = pots().filter(p => p.kind !== 'mp2').reduce((s, p) => s + potNow(p), 0), locked = pots().filter(p => p.kind === 'mp2').reduce((s, p) => s + potNow(p), 0);
   const ess = spent;   // usual spending: many entries have no note or leave as transfers, so a category-based 'essentials' figure would be too low
   const r = x => Math.round(x);
   return [`Pera's planning numbers (exact, use as is; averages of the last ${past.length} finished months):`,
-    `- Take-home income ${r(inc)}/month${f.useSal ? ` (salary ${r(f.aIn)})` : ''}; spent ${r(spent)}/month (incl. bills, not savings); saved ${r(saved)}/month = ${inc ? Math.round(saved / inc * 100) : 0}% of income.`,
+    `- Budget on ${baseName}: ${r(base)}/month${baseName === 'salary' ? ` (all money in averages ${r(inc)}, but refunds and transfers from own accounts aren't income to plan with)` : ''}; spent ${r(spent)}/month (incl. bills, not savings); saved ${r(saved)}/month = ${base ? Math.round(saved / base * 100) : 0}% of ${baseName}.`,
     `- Bills already scheduled, next 3 months: ${billsAhead.map(r).join(', ')} (avg ${r(billsAvg)}/month).`,
-    `- Suggested savings target: ${r(target)}/month (the higher of 20% of income or what they already save) = ${r(target / 2)} each payday.`,
-    `- Suggested monthly spending cap, not counting scheduled bills: ${r(cap)} (income ${r(inc)} − savings ${r(target)} − bills ${r(billsAvg)}); about ${r(cap / 2)} per pay period, ${r(cap / 30)}/day.`,
-    `- 50/30/20 of income: needs ${r(inc * .5)}, wants ${r(inc * .3)}, savings ${r(inc * .2)}.`,
+    `- Suggested savings target: ${r(target)}/month (the higher of 20% of ${baseName} or what they already save) = ${r(target / 2)} each payday.`,
+    `- Suggested monthly spending cap, not counting scheduled bills: ${r(cap)} (${baseName} ${r(base)} − savings ${r(target)} − bills ${r(billsAvg)}); about ${r(cap / 2)} per pay period, ${r(cap / 30)}/day.`,
+    `- 50/30/20 of ${baseName}: needs ${r(base * .5)}, wants ${r(base * .3)}, savings ${r(base * .2)}.`,
     `- Emergency fund: ${r(liquid)} in withdrawable savings (plus ${r(locked)} locked in MP2) covers ${ess > 0 ? (liquid / ess).toFixed(1) : '?'} months of their usual spending (${r(ess)}/month).`];
 }
 const FIN_KNOWLEDGE = `Money know-how to apply (use it with their numbers; name the method in a few words when you use one):
-- Spending cap / budget: never answer that none is set. Use "Pera's planning numbers": suggest the cap given there and explain it in one line (income minus savings target minus bills). Offer the 50/30/20 split (needs/wants/savings of take-home pay) as a cross-check, and pay-yourself-first: move savings on payday (15th and 30th) before spending.
+- Spending cap / budget: never answer that none is set. Use "Pera's planning numbers": suggest the cap given there and explain it in one line (salary, or income when no salary is detected, minus savings target minus bills). Offer the 50/30/20 split (needs/wants/savings of take-home pay) as a cross-check, and pay-yourself-first: move savings on payday (15th and 30th) before spending.
 - Savings rate: 20% of take-home is a common floor; 30%+ is strong. Compare with their actual rate.
 - Emergency fund: 3–6 months of usual spending (6+ if income is irregular or one income supports others), kept somewhere withdrawable (savings account, time deposit that allows early withdrawal). MP2 is locked for 5 years, so it doesn't count.
 - Debt and PayLater: pay the full statement balance; BNPL/credit card interest and late fees cost far more than savings earn. Pay highest-rate debt first (avalanche) or smallest first for motivation (snowball). Treat PayLater installments as fixed bills when planning; avoid stacking new ones while old ones run.
