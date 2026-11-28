@@ -306,6 +306,78 @@ function spentByDay(y, i, day) {   // spending in a month up to a day of that mo
   const m = S.years[y] && S.years[y][i]; if (!m) return 0;
   return m.exp.filter(x => dayOf(x, y, i) <= day).reduce((s, x) => s + +x.a, 0) + sum(billsIn(y, i)) + (+m.sav || 0);
 }
+/* ---- Piso: Pera's coin buddy. Its mood follows your money; tap it for a tip. Original character drawn in SVG. ---- */
+const pisoOn = () => look().mascot !== 'off';
+function pisoSVG(mood = 'happy', size = 56) {
+  const eyes = {
+    happy: '<g class="pe"><circle cx="25" cy="30" r="2.6"/><circle cx="39" cy="30" r="2.6"/></g>',
+    calm: '<g class="pe"><circle cx="25" cy="31" r="2.4"/><circle cx="39" cy="31" r="2.4"/></g>',
+    worried: '<g class="pe"><circle cx="25" cy="31" r="2.4"/><circle cx="39" cy="31" r="2.4"/></g><path d="M21 27.2q3.5-1.2 7-3M43 27.2q-3.5-1.2-7-3" class="pl"/>',
+    cheer: '<path d="M21.5 31q3.5-5 7 0M35.5 31q3.5-5 7 0" class="pl"/>',
+    wince: '<path d="M22 28l5 2.5-5 2.5M42 28l-5 2.5 5 2.5" class="pl"/>',
+    sleepy: '<path d="M21.5 31q3.5 2.6 7 0M35.5 31q3.5 2.6 7 0" class="pl"/>'}[mood] || '';
+  const mouth = {
+    happy: '<path d="M26 37q6 6 12 0" class="pl"/>', calm: '<path d="M27.5 38q4.5 2.6 9 0" class="pl"/>',
+    worried: '<path d="M26.5 40q2.75-2.4 5.5 0t5.5 0" class="pl"/>', cheer: '<path d="M25 36.5h14q-1 8-7 8t-7-8z" class="pm"/>',
+    wince: '<path d="M27 39.5l2.5-1.5 2.5 1.5 2.5-1.5 2.5 1.5" class="pl"/>', sleepy: '<ellipse cx="32" cy="39.5" rx="2.2" ry="2.6" class="pm"/>'}[mood] || '';
+  const extra = {
+    worried: '<path d="M47 20q3 4.5 0 6.4q-3-1.9 0-6.4z" fill="#8ecbf0"/>',
+    cheer: '<path d="M9 30l-4-8M55 30l4-8" class="pa"/><circle cx="5" cy="21" r="2.4" class="pf"/><circle cx="59" cy="21" r="2.4" class="pf"/>',
+    sleepy: '<text x="48" y="15" class="pz">z</text><text x="54" y="9" class="pz" style="font-size:7px">z</text>'}[mood] || '';
+  return `<svg class="pisosvg" viewBox="0 0 64 64" width="${size}" height="${size}" aria-hidden="true">
+    <defs><radialGradient id="pg" cx="38%" cy="30%" r="75%"><stop offset="0" stop-color="#ffe7a3"/><stop offset=".6" stop-color="#f2c14e"/><stop offset="1" stop-color="#d99a22"/></radialGradient></defs>
+    <ellipse cx="32" cy="60" rx="15" ry="2.4" class="psh"/>
+    <g class="pbody"><circle cx="32" cy="32" r="25" fill="url(#pg)" stroke="#b87a12" stroke-width="2"/>
+    <circle cx="32" cy="32" r="20.5" fill="none" stroke="#c98d1c" stroke-width="1.2" stroke-dasharray="1.5 2.6" opacity=".7"/>
+    <path d="M17 21q4-7 12-9" stroke="#fff6d8" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".8"/>
+    <circle cx="20.5" cy="36.5" r="3" class="pc"/><circle cx="43.5" cy="36.5" r="3" class="pc"/>${eyes}${mouth}${extra}</g></svg>`;
+}
+// what Piso says right now: the one thing that matters most today
+function pisoNow() {
+  const h = today().getHours ? new Date().getHours() : 12, L = leftToSpend(), P = L && L.P, md = d => fmtDate(d, {month: 'short', day: 'numeric'});
+  if (pisoReact && Date.now() < pisoReact.until) return pisoReact;
+  if (h >= 23 || h < 5) return {mood: 'sleepy', line: L ? `Late na! ${peso(Math.max(0, L.left))} left until ${md(L.next)}. Sleep on any big buys.` : 'Late na! Rest muna.'};
+  if (!L) return {mood: 'calm', line: 'Add a couple of months of entries and I’ll keep an eye on your budget.'};
+  const tight = P ? paydayData(P.base, P.target, P.cap).find(x => x.tight && daysBetween(todayIso(), x.date) <= 10) : null;
+  if (L.left < 0) return {mood: 'worried', line: `We’re ${peso(-L.left)} over this pay period. Let’s keep it light until ${md(L.next)}.`};
+  if (tight) return {mood: 'worried', line: `Heads up: ${md(tight.date)} pays ${peso(tight.bt)} in bills. Set a little aside before then.`};
+  if (L.perDay < (L.budget / 15) * 0.5) return {mood: 'calm', line: `Easy lang: about ${peso(L.perDay)} a day until ${md(L.next)}.`};
+  return {mood: 'happy', line: `Kaya pa! About ${peso(L.perDay)} a day until ${md(L.next)}.`};
+}
+// tap: a different useful line each time
+let pisoTip = 0, pisoReact = null;
+function pisoTips() {
+  const L = leftToSpend(), P = L && L.P, out = [], md = d => fmtDate(d, {month: 'short', day: 'numeric'});
+  if (L) out.push({mood: 'calm', line: `${L.days} day${L.days === 1 ? '' : 's'} until payday on ${md(L.next)}. ${peso(L.spent)} spent so far this pay period.`});
+  if (P) { const t = paydayData(P.base, P.target, P.cap).find(x => x.tight); if (t) out.push({mood: 'worried', line: `${md(t.date)} is a tight payday: ${peso(t.bt)} in bills from that pay.`}); }
+  for (const g of goals()) { const c = goalCalc(g); if (c.done) { out.push({mood: 'cheer', line: `${g.name}: reached! 🎉`}); continue; } if (P && P.saved > 0) { const n = gMonths(c.cur, c.target, P.saved, c.r); if (isFinite(n)) out.push({mood: 'happy', line: `${g.name}: ${Math.round(c.prog * 100)}% there, around ${inMonths(n)} at your usual saving.`}); } }
+  if (P && P.base > 0) out.push({mood: P.saved / P.base >= 0.2 ? 'cheer' : 'calm', line: `You save about ${Math.round(P.saved / P.base * 100)}% of your ${P.baseName}. ${P.saved / P.base >= 0.2 ? 'That’s solid!' : '20% is a good target.'}`});
+  out.push({mood: 'happy', line: 'Tip: move savings on payday, before spending. Ask me anything with ✦ up top.'});
+  return out;
+}
+function pisoRow() {
+  if (!pisoOn()) return '';
+  const n = pisoNow();
+  return `<div class="pisorow"><button class="piso m-${n.mood}" data-act="piso" aria-label="Piso, your money buddy. Tap for a tip">${pisoSVG(n.mood)}</button><p class="pisotalk" aria-live="polite">${esc(n.line)}</p></div>`;
+}
+function pisoSay(n) {
+  const b = document.querySelector('.pisorow .piso'), t = document.querySelector('.pisorow .pisotalk'); if (!b || !t) return;
+  b.className = `piso m-${n.mood}`; b.innerHTML = pisoSVG(n.mood); t.textContent = n.line;
+  b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
+}
+// reacts when you add something (shown for a few seconds)
+function pisoAdded(kind, a, note) {
+  if (!pisoOn()) return;
+  const L = leftToSpend(), md = d => fmtDate(d, {month: 'short', day: 'numeric'});
+  let r;
+  if (kind === 'inc') r = {mood: 'cheer', line: `Yay, ${peso(a)} in! 🎉`};
+  else if (L && a >= Math.max(1000, L.budget / 15 * 2)) r = {mood: 'wince', line: `Oof, ${peso(a)}${note ? ` on ${note}` : ''}. ${L.left >= 0 ? `${peso(L.left)} left until ${md(L.next)}.` : `That puts us ${peso(-L.left)} over this pay period.`}`};
+  else r = {mood: L && L.left < 0 ? 'worried' : 'happy', line: `Noted${note ? `: ${note}` : ''}. ${L ? (L.left >= 0 ? `${peso(L.left)} left until ${md(L.next)}.` : `${peso(-L.left)} over this pay period.`) : ''}`};
+  pisoReact = {...r, until: Date.now() + 7000};
+  setTimeout(() => { pisoSay(pisoNow()); }, 60);
+  setTimeout(() => { if (pisoReact && Date.now() >= pisoReact.until) { pisoReact = null; pisoSay(pisoNow()); } }, 7100);
+}
+
 /* ---- left to spend until the next payday (paid on the 15th and the 30th / end of month) ---- */
 function payPeriod(t = today()) {
   const y = t.getFullYear(), m = t.getMonth(), d = t.getDate(), p30 = mm => Math.min(30, new Date(y, mm + 1, 0).getDate());
@@ -321,13 +393,20 @@ function leftToSpend() {
   const {start, next} = payPeriod(), t = todayIso(), rows = [];
   for (const y of Object.keys(S.years)) S.years[y].forEach(m => m.exp.forEach(x => { if (x.d && x.d >= start && x.d <= t && +x.a > 0) rows.push(x); }));
   const cat = x => (x.c && CAT_NAMES.includes(x.c) ? x.c : catOf(x.n || '', x.bill));
+  const skip = new Set(capSkip());   // categories you said don't count as everyday spending
   const bills = rows.filter(x => cat(x) === 'Bills & PayLater').reduce((s, x) => s + +x.a, 0);
   const tr = rows.filter(x => cat(x) === 'Transfers').reduce((s, x) => s + +x.a, 0);
+  const skipped = rows.filter(x => skip.has(cat(x)) && cat(x) !== 'Bills & PayLater').reduce((s, x) => s + +x.a, 0);
   const deps = (S.meta.savings || []).flatMap(p => p.kind === 'td' ? (p.cycles || []).flatMap(c => c.deposits || []) : p.kind === 'mp2' ? (p.deposits || []) : (p.txns || []).filter(x => x.a > 0)).filter(d => d.date >= start && d.date <= t).reduce((s, d) => s + +d.a, 0);
-  const saved = Math.min(deps, tr), spent = rows.reduce((s, x) => s + +x.a, 0) - bills - saved;
+  const saved = skip.has('Transfers') ? 0 : Math.min(deps, tr), spent = rows.reduce((s, x) => s + +x.a, 0) - bills - saved - skipped;
   const budget = P.cap / 2, left = budget - spent, days = Math.max(1, daysBetween(t, next));
-  return {start, next, budget, spent, left, days, perDay: left / days, bills, saved, own: !!P.own, P};
+  // what was counted, for the breakdown
+  const byCat = {}; rows.forEach(x => { const c = cat(x); if (c === 'Bills & PayLater' || skip.has(c)) return; byCat[c] = (byCat[c] || 0) + +x.a; });
+  if (saved) byCat['Transfers'] = (byCat['Transfers'] || 0) - saved;
+  const counted = rows.filter(x => { const c = cat(x); return c !== 'Bills & PayLater' && !skip.has(c); }).sort((a, b) => b.a - a.a);
+  return {start, next, budget, spent, left, days, perDay: left / days, bills, saved, skipped, byCat, counted, cat, own: !!P.own, P};
 }
+const capSkip = () => S.meta.capSkip || [];
 function leftLines() {
   const L = leftToSpend(); if (!L) return [];
   return [`- This pay period (${L.start} to the day before ${L.next}): budget ${Math.round(L.budget)}, everyday spending so far ${Math.round(L.spent)} (bills and savings not counted), ${L.left >= 0 ? `${Math.round(L.left)} left = ${Math.round(L.perDay)}/day for ${L.days} days` : `over by ${Math.round(-L.left)}`}.`];
@@ -340,7 +419,7 @@ function leftHTML() {
     <b class="lv">${over ? '−' : ''}${esc(peso(Math.abs(L.left)))}</b>
     <span class="ls">${over ? 'over this pay period’s budget' : `about <b>${esc(peso(Math.max(0, L.perDay)))}</b> a day for ${L.days} day${L.days === 1 ? '' : 's'}`}</span>
     <span class="pbar thin"><b style="width:${pct.toFixed(1)}%"></b></span>
-    <span class="ls muted">${esc(peso(L.spent))} spent of ${esc(peso(L.budget))} since ${esc(md(L.start))} · ${L.own ? 'your cap' : 'suggested cap'}, bills and savings not counted</span></button>`;
+    <span class="ls muted">${esc(peso(L.spent))} spent of ${esc(peso(L.budget))} since ${esc(md(L.start))} · ${L.own ? 'your cap' : 'suggested cap'}, bills and savings not counted · tap to see what counted</span></button>`;
 }
 function capSheet() {
   const P = planNumbers(); if (!P) return toast('Pera needs two finished months to suggest a cap.');
@@ -350,7 +429,23 @@ function capSheet() {
     <div class="tiles"><div class="tile"><span>Suggested</span><b>${esc(pesoS(P.suggested))}</b></div><div class="tile"><span>${P.baseName === 'salary' ? 'Salary' : 'Income'}</span><b>${esc(pesoS(P.base))}</b></div><div class="tile"><span>Savings + bills</span><b>${esc(pesoS(P.target + P.billsAvg))}</b></div></div>
     <p class="muted">Suggested = ${P.baseName} ${esc(peso(r(P.base)))} − savings ${esc(peso(r(P.target)))} − bills ${esc(peso(r(P.billsAvg)))} (average of the next 3 months).</p>
     <label for="capIn">Your own cap (optional)</label><input id="capIn" inputmode="decimal" placeholder="${esc(String(r(P.suggested)))}" value="${P.own ? r(P.own) : ''}">
-    <button class="go" data-act="cap-save">Save</button>${P.own ? '<button class="ghost" data-act="cap-clear" style="width:100%;margin-top:8px">Use the suggestion instead</button>' : ''}`);
+    <button class="go" data-act="cap-save">Save</button>${P.own ? '<button class="ghost" data-act="cap-clear" style="width:100%;margin-top:8px">Use the suggestion instead</button>' : ''}
+    ${capBreakdownHTML()}`);
+}
+// what "left to spend" counted this pay period, so a wrong number can be traced and fixed
+function capBreakdownHTML() {
+  const L = leftToSpend(); if (!L) return '';
+  const md = d => fmtDate(d, {month: 'short', day: 'numeric'}), skip = new Set(capSkip());
+  const cats = Object.entries(L.byCat).filter(([, v]) => Math.abs(v) >= 1).sort((a, b) => b[1] - a[1]);
+  const allCats = [...new Set([...Object.keys(L.byCat), ...skip])].filter(c => c !== 'Bills & PayLater').sort();
+  return `<h2 style="font-size:18px">Counted since ${esc(md(L.start))}</h2>
+    <p class="muted">${esc(peso(L.spent))} of everyday spending.${L.bills ? ` Not counted: ${esc(peso(L.bills))} in bills & PayLater` : ''}${L.saved ? `${L.bills ? ',' : ' Not counted:'} ${esc(peso(L.saved))} of transfers that went into savings` : ''}${L.skipped ? `, ${esc(peso(L.skipped))} in categories you switched off` : ''}.</p>
+    <ul class="list capcats">${cats.map(([c, v]) => `<li><span class="t"><b class="catdot2" style="background:${catCol(c)}"></b>${esc(c)}</span><b class="amt">${esc(peso(v))}</b></li>`).join('') || '<li class="muted">Nothing yet</li>'}</ul>
+    <h3 style="font-size:15px;margin:14px 0 4px">Biggest items</h3>
+    <ul class="list capcats">${L.counted.slice(0, 6).map(x => `<li><span class="t">${esc(showName(x.n) || 'No description')}<small>${esc(md(x.d))} · ${esc(L.cat(x))}</small></span><b class="amt">${esc(peso(+x.a))}</b></li>`).join('')}</ul>
+    <h3 style="font-size:15px;margin:14px 0 4px">Count these as everyday spending</h3>
+    <p class="muted">Switch off categories that aren’t really day-to-day, like transfers to your own wallets or a one-off purchase category.</p>
+    ${allCats.map(c => `<div class="switchrow"><span>${esc(c)}</span><button class="switch" role="switch" aria-checked="${!skip.has(c)}" data-act="cap-cat" data-c="${esc(c)}" aria-label="Count ${esc(c)}"></button></div>`).join('')}`;
 }
 function homeMonth(cur, prev) {
   const box = $('hMonth'), t = today(), isNow = cur.now;
@@ -365,7 +460,7 @@ function homeMonth(cur, prev) {
   }
   const tick = isNow && cur.inc > 0 ? Math.min(100, day / days * 100) : null;
   box.hidden = false;
-  box.innerHTML = `${isNow ? leftHTML() : ''}<div class="hhead"><h2>${isNow ? 'This month' : M[cur.i] + ' ' + cur.y}</h2>${isNow ? `<span class="muted">Day ${day} of ${days}</span>` : ''}</div>
+  box.innerHTML = `${isNow ? pisoRow() + leftHTML() : ''}<div class="hhead"><h2>${isNow ? 'This month' : M[cur.i] + ' ' + cur.y}</h2>${isNow ? `<span class="muted">Day ${day} of ${days}</span>` : ''}</div>
     <div class="leftnum"><b class="${over ? 'dn' : ''}" data-count="left" data-n="${Math.abs(left)}" data-d="0">${esc(peso(Math.abs(left)))}</b><span>${over ? 'more went out than came in' : cur.inc ? 'left after spending and saving' : 'no income added yet'}</span></div>
     <div class="pbar${over ? ' over' : ''}" role="img" aria-label="${Math.round(pct)}% of income used"><b style="width:${pct.toFixed(1)}%"></b>${sPct > 0 && !over ? `<b class="savpart" style="left:${(pct - sPct).toFixed(1)}%;width:${sPct.toFixed(1)}%"></b>` : ''}${tick != null ? `<i style="left:${tick.toFixed(1)}%" title="Even pace for day ${day}"></i>` : ''}</div>
     <div class="pmeta"><span>${cur.inc ? (savedPart > 0 && !over ? `${Math.round(cur.spent / cur.inc * 100)}% spent · <span class="savtxt">${Math.round(savedPart / cur.inc * 100)}% saved</span>` : Math.round(out / cur.inc * 100) + '% of income used') : ''}</span>${tick != null ? '<span class="muted">┆ even pace</span>' : ''}</div>
@@ -469,10 +564,13 @@ function drawChart() {
   ${k < ser.length - 1 && W > 340 ? endLabel() : ''}`;
   // the planned end value: above the end point unless the line passes through there, then below it
   function endLabel() {
-    const ly = Y(last.total), span = 110, near = ser.map((p, j) => [X(j), Y(p.total)]).filter(([x]) => x >= W - pr - span);
-    const nowY = Y(ser[k].total), blockedAbove = near.some(([, y]) => y < ly - 2 && y > ly - 26) || (kx > W - pr - span && Math.abs(nowY - (ly - 9)) < 24);
-    const y = blockedAbove ? Math.min(H - pb - 4, ly + 17) : Math.max(13, ly - 9);
-    return `<text x="${W - pr}" y="${y}" text-anchor="end" font-size="11" fill="var(--mute)" paint-order="stroke" stroke="var(--card)" stroke-width="3">${esc(M[last.i].slice(0, 3) + ' ' + last.y)} · ${esc(pesoS(last.total))}</text>`;
+    const txt = `${M[last.i].slice(0, 3)} ${last.y} · ${pesoS(last.total)}`, w = txt.length * 6.3 + 6, ly = Y(last.total);
+    const pts = ser.map((p, j) => [X(j), Y(p.total)]);
+    const lineY = x => { for (let j = 1; j < pts.length; j++) if (x <= pts[j][0]) { const [x0, y0] = pts[j - 1], [x1, y1] = pts[j]; return y0 + (y1 - y0) * (x - x0) / ((x1 - x0) || 1); } return pts[pts.length - 1][1]; };
+    const hits = y => { for (let x = W - pr - w; x <= W - pr; x += 2) { const l = lineY(x); if (l > y - 13 && l < y + 5) return true; } return Math.abs(Y(ser[k].total) - 10 - y) < 14 && kx > W - pr - w - 20; };   // also keep clear of "Now"
+    const tries = [ly - 10, ly + 18, ly - 26, ly + 34, pt + 2 + 11, H - pb - 6].map(y => Math.min(H - pb - 4, Math.max(13, y)));
+    const y = tries.find(t => !hits(t)) ?? tries[1];
+    return `<text x="${W - pr}" y="${y}" text-anchor="end" font-size="11" fill="var(--mute)" paint-order="stroke" stroke="var(--bg)" stroke-width="4" stroke-linejoin="round">${esc(txt)}</text>`;
   }
 }
 const chartRO = new ResizeObserver(drawChart); chartRO.observe($('chart'));
@@ -1670,7 +1768,7 @@ function amtIn(q) {
 // starter questions that fit the data (no goal yet → ask about one)
 function starterQs() {
   const last = lastMonths(2)[0], mn = last ? new Date(last.y, last.i).toLocaleDateString('en-PH', {month: 'long'}) : 'last month';
-  const top = last ? Object.entries(spendingIn([last]).reduce((o, r) => (!['Transfers', 'Other', 'No description'].includes(r.cat) && (o[r.cat] = (o[r.cat] || 0) + r.a), o), {})).sort((a, b) => b[1] - a[1])[0] : null;
+  const top = last ? Object.entries(spendingIn([last]).reduce((o, r) => (!['Transfers', 'Other', 'No description', 'Bills & PayLater'].includes(r.cat) && (o[r.cat] = (o[r.cat] || 0) + r.a), o), {})).sort((a, b) => b[1] - a[1])[0] : null;
   return [top ? `How much did I spend on ${top[0].toLowerCase()} in ${mn}?` : 'How much did I spend last month?', 'Where can I cut back?',
     goals().length ? `When will I reach ${goals()[0].name}?` : 'How long to save ₱500,000?', (S.meta.bills || []).some(b => !b.paid) ? 'What bills are coming up?' : 'How much can I save each payday?'];
 }
@@ -1679,7 +1777,7 @@ function starterQs() {
 let chat = [];
 function askSheet() {
   openSheet(`<div class="sheethead"><h2>Ask Pera</h2><button type="button" class="ghost" data-act="close">Done</button></div>
-    <div class="chat" id="chatLog" aria-live="polite">${chat.length ? '' : `<p class="muted">Ask anything about your money. Pera sends a summary of your numbers to Google Gemini to answer.</p>`}</div>
+    <div class="chat" id="chatLog" aria-live="polite">${chat.length ? '' : `${pisoOn() ? `<div class="pisohi">${pisoSVG('happy', 64)}<p><b>Hi, I’m Piso!</b> Ask me anything about your money: your budget, a goal, a big purchase.</p></div>` : ''}<p class="muted">Pera sends a summary of your numbers to Google Gemini to answer.</p>`}</div>
     <div class="chips aisugg" id="chatSugg"></div>
     <form id="chatF" class="chatf" novalidate><input id="chatQ" autocomplete="off" enterkeyhint="send" placeholder="Ask about your money…" aria-label="Your question"><button class="go" type="submit" aria-label="Send">${SPARK}</button></form>`);
   $('sheet').classList.add('tall'); paintChat();
@@ -1692,7 +1790,7 @@ function paintChat(thinking) {
   const log = $('chatLog'); if (!log) return;
   const secs = chatBusy ? Math.round((Date.now() - chatBusy) / 1000) : 0;
   if (chat.length) log.innerHTML = chat.map((m, k) => m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>`
-    : `<div class="msg ai${m.err ? ' err' : ''}">${m.err ? `${esc(m.text)}${k === chat.length - 1 && !chatBusy ? '<br><button class="retry" data-act="ask-retry">Try again</button>' : ''}` : aiHTML(splitFollow(m.text).text)}${m.cached && k === chat.length - 1 ? `<p class="cachednote">Saved answer · your numbers haven’t changed since. <button class="linkbtn" data-act="ask-fresh">Ask again</button></p>` : ''}</div>`).join('')
+    : `${pisoOn() ? `<span class="pisoav" aria-hidden="true">${pisoSVG(m.err ? 'worried' : 'happy', 26)}</span>` : ''}<div class="msg ai${m.err ? ' err' : ''}">${m.err ? `${esc(m.text)}${k === chat.length - 1 && !chatBusy ? '<br><button class="retry" data-act="ask-retry">Try again</button>' : ''}` : aiHTML(splitFollow(m.text).text)}${m.cached && k === chat.length - 1 ? `<p class="cachednote">Saved answer · your numbers haven’t changed since. <button class="linkbtn" data-act="ask-fresh">Ask again</button></p>` : ''}</div>`).join('')
     + (thinking ? `<div class="msg ai thinking"><i></i><i></i><i></i>${aiqText(chatState) ? `<span>${esc(aiqText(chatState))}</span>` : secs >= 4 ? `<span>Thinking… ${secs}s</span>` : ''}</div>` : '');
   const sg = $('chatSugg');
   if (sg) {
@@ -2452,7 +2550,7 @@ function entryForm(o) {
         if (y !== String(o.y) || i !== o.i) { from[t].splice(k, 1); ensureYear(y)[i][t].push(x); keys.add('meta'); }
         closeSheet(); commit(...keys); toast('Saved'); return;
       }
-      const it = {id: uid(), a, n, d: dt}; if (t === 'exp' && picked && cat) { it.c = cat; rememberCat(n, cat); } ensureYear(y)[i][t].push(it); closeSheet(); commit('y' + y, 'meta');
+      const it = {id: uid(), a, n, d: dt}; if (t === 'exp' && picked && cat) { it.c = cat; rememberCat(n, cat); } ensureYear(y)[i][t].push(it); closeSheet(); commit('y' + y, 'meta'); pisoAdded(t, a, n);
       toast(`Added to ${M[i]}${y !== String(today().getFullYear()) ? ' ' + y : ''}`, () => { const m = S.years[y][i]; m[t] = m[t].filter(z => z.id !== it.id); commit('y' + y); });
     });
     const d = $('fdel');
@@ -2639,6 +2737,8 @@ function settings() {
     <div class="swatches">${ACCENTS.map(([k, l, c]) => `<button class="swatch" style="background:${c}" data-act="look" data-k="accent" data-v="${k}" aria-pressed="${look().accent === k}" aria-label="${l}" title="${l}"></button>`).join('')}</div>
     <div class="switchrow"><span><b>Colourful</b><br><span class="muted">Tints cards and the top of the screen with your colour.</span></span>
       <button class="switch" role="switch" aria-checked="${look().style === 'colorful'}" data-act="look" data-k="style" data-v="${look().style === 'colorful' ? 'plain' : 'colorful'}" aria-label="Colourful"></button></div>
+    <div class="switchrow"><span><b>Piso, the coin buddy</b><br><span class="muted">Shows how your budget is doing and reacts when you add entries.</span></span>
+      <button class="switch" role="switch" aria-checked="${pisoOn()}" data-act="look" data-k="mascot" data-v="${pisoOn() ? 'off' : 'on'}" aria-label="Piso, the coin buddy"></button></div>
     <h2>App lock</h2>
     <div class="switchrow"><span><b>Lock with fingerprint</b><br><span class="muted">Asks for your fingerprint or face when you open Pera and after a minute away. This device only.</span></span>
       <button class="switch" role="switch" aria-checked="${!!lockState}" data-act="lock-toggle" aria-label="Lock with fingerprint"></button></div>
@@ -3514,12 +3614,14 @@ document.addEventListener('click', e => {
     case 'ask': return askSheet();
     case 'ask-q': return askPera(d.q);
     case 'cap-set': return capSheet();
+    case 'piso': { const tips = pisoTips(); pisoReact = null; return pisoSay(tips[pisoTip++ % tips.length]); }
     case 'share-to': return shareTo(d.t, d.id);
     case 'share-cancel': sharedFiles = null; return closeSheet();
     case 'p13': return plan13Sheet();
     case 'p13-reset': { const sg = plan13Suggest(read13().amount); fill13(sg); return paint13(); }
     case 'p13-save': { const v = read13(); S.meta.plan13 = {yr: thirteenth().yr, ...v, at: Date.now()}; commit('meta'); closeSheet(); render(); return toast('13th month plan saved'); }
     case 'cap-save': { const v = parseFloat(($('capIn').value || '').replace(/[^\d.]/g, '')); if (v > 0) S.meta.cap = Math.round(v); else delete S.meta.cap; commit('meta'); closeSheet(); return toast(v > 0 ? `Cap set to ${peso(Math.round(v))} a month` : 'Using the suggested cap'); }
+    case 'cap-cat': { const sk = new Set(capSkip()); sk.has(d.c) ? sk.delete(d.c) : sk.add(d.c); S.meta.capSkip = [...sk]; commit('meta'); return capSheet(); }
     case 'cap-clear': delete S.meta.cap; commit('meta'); closeSheet(); return toast('Using the suggested cap');
     case 'pshot-tog': { const r = potShot && potShot.rows[+d.k]; if (r) { r.on = !r.on; renderPotShot(); } return; }
     case 'pshot-go': return applyPotShot();

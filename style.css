@@ -556,3 +556,29 @@ main.app{display:block}header.top{display:flex}
 .sharech{all:unset;box-sizing:border-box;cursor:pointer;display:block;padding:14px 16px;border-radius:14px;background:var(--bg);border:1px solid var(--line)}
 .sharech:focus-visible{outline:2px solid var(--blue)}.sharech:disabled{opacity:.5;cursor:default}
 .sharech b{display:block;font-size:16px}.sharech small{display:block;color:var(--mute);font-size:13px;margin-top:2px}
+
+/* Piso */
+.pisorow{display:flex;align-items:flex-end;gap:10px;margin:-4px 0 10px}
+.piso{all:unset;cursor:pointer;flex:none;width:60px;height:60px;display:grid;place-items:center;border-radius:50%;-webkit-tap-highlight-color:transparent}
+.piso:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.pisosvg .pe{fill:#3b2a0b}.pisosvg .pl{fill:none;stroke:#3b2a0b;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.pisosvg .pm{fill:#7a2f12;stroke:#3b2a0b;stroke-width:1.6;stroke-linejoin:round}.pisosvg .pc{fill:#f08c74;opacity:.55}
+.pisosvg .pa{stroke:#b87a12;stroke-width:3;stroke-linecap:round}.pisosvg .pf{fill:#f2c14e;stroke:#b87a12;stroke-width:1.4}
+.pisosvg .pz{font:700 9px Inter,sans-serif;fill:var(--mute)}.pisosvg .psh{fill:#000;opacity:.18}
+.pisotalk{position:relative;margin:0 0 10px;padding:10px 13px;border-radius:16px 16px 16px 4px;background:var(--card);border:1px solid var(--line);font-size:14px;line-height:1.35;max-width:32ch}
+.pisohi{display:flex;gap:12px;align-items:center;margin:4px 0 8px}.pisohi p{margin:0}
+.chat .pisoav{display:block;width:26px;height:26px;margin:6px 0 -2px}
+@media (prefers-reduced-motion:no-preference){
+  .piso .pbody{animation:pisobob 3.2s ease-in-out infinite;transform-origin:32px 56px}
+  .piso .pe{animation:pisoblink 5.5s infinite;transform-origin:32px 30px}
+  .piso.pop .pbody{animation:pisopop .55s cubic-bezier(.3,1.6,.5,1)}
+  .piso.m-cheer .pbody{animation:pisojump .7s ease-in-out 2}
+  .piso.m-worried .pbody{animation:pisoshake .5s ease-in-out 1}
+}
+@keyframes pisobob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}
+@keyframes pisoblink{0%,94%,100%{transform:scaleY(1)}96%{transform:scaleY(.1)}}
+@keyframes pisopop{0%{transform:scale(.85)}60%{transform:scale(1.08)}100%{transform:scale(1)}}
+@keyframes pisojump{0%,100%{transform:translateY(0)}40%{transform:translateY(-7px) rotate(-6deg)}70%{transform:translateY(0) rotate(4deg)}}
+@keyframes pisoshake{0%,100%{transform:rotate(0)}25%{transform:rotate(-7deg)}75%{transform:rotate(7deg)}}
+.pisohi .pisosvg{width:64px;height:64px;flex:none}.chat .pisoav .pisosvg{width:26px;height:26px}
+.capcats li{display:flex;justify-content:space-between;gap:10px;padding:8px 0}.capcats .t{display:flex;flex-direction:column}.capcats .t small{color:var(--mute);font-size:12px}
