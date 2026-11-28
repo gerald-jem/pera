@@ -308,7 +308,9 @@ function spentByDay(y, i, day) {   // spending in a month up to a day of that mo
 }
 /* ---- Piso: Pera's coin buddy. Its mood follows your money; tap it for a tip. Original character drawn in SVG. ---- */
 const pisoOn = () => look().mascot !== 'off';
+let pisoN = 0;
 function pisoSVG(mood = 'happy', size = 56) {
+  const gid = 'pg' + (++pisoN);   // each drawing needs its own gradient id: a shared one disappears when its first copy is hidden
   const eyes = {
     happy: '<g class="pe"><circle cx="25" cy="30" r="2.6"/><circle cx="39" cy="30" r="2.6"/></g>',
     calm: '<g class="pe"><circle cx="25" cy="31" r="2.4"/><circle cx="39" cy="31" r="2.4"/></g>',
@@ -325,9 +327,9 @@ function pisoSVG(mood = 'happy', size = 56) {
     cheer: '<path d="M9 30l-4-8M55 30l4-8" class="pa"/><circle cx="5" cy="21" r="2.4" class="pf"/><circle cx="59" cy="21" r="2.4" class="pf"/>',
     sleepy: '<text x="48" y="15" class="pz">z</text><text x="54" y="9" class="pz" style="font-size:7px">z</text>'}[mood] || '';
   return `<svg class="pisosvg" viewBox="0 0 64 64" width="${size}" height="${size}" aria-hidden="true">
-    <defs><radialGradient id="pg" cx="38%" cy="30%" r="75%"><stop offset="0" stop-color="#ffe7a3"/><stop offset=".6" stop-color="#f2c14e"/><stop offset="1" stop-color="#d99a22"/></radialGradient></defs>
+    <defs><radialGradient id="${gid}" cx="38%" cy="30%" r="75%"><stop offset="0" stop-color="#ffe7a3"/><stop offset=".6" stop-color="#f2c14e"/><stop offset="1" stop-color="#d99a22"/></radialGradient></defs>
     <ellipse cx="32" cy="60" rx="15" ry="2.4" class="psh"/>
-    <g class="pbody"><circle cx="32" cy="32" r="25" fill="url(#pg)" stroke="#b87a12" stroke-width="2"/>
+    <g class="pbody"><circle cx="32" cy="32" r="25" fill="url(#${gid})" stroke="#b87a12" stroke-width="2"/>
     <circle cx="32" cy="32" r="20.5" fill="none" stroke="#c98d1c" stroke-width="1.2" stroke-dasharray="1.5 2.6" opacity=".7"/>
     <path d="M17 21q4-7 12-9" stroke="#fff6d8" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".8"/>
     <circle cx="20.5" cy="36.5" r="3" class="pc"/><circle cx="43.5" cy="36.5" r="3" class="pc"/>${eyes}${mouth}${extra}</g></svg>`;
@@ -1790,8 +1792,8 @@ function paintChat(thinking) {
   const log = $('chatLog'); if (!log) return;
   const secs = chatBusy ? Math.round((Date.now() - chatBusy) / 1000) : 0;
   if (chat.length) log.innerHTML = chat.map((m, k) => m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>`
-    : `${pisoOn() ? `<span class="pisoav" aria-hidden="true">${pisoSVG(m.err ? 'worried' : 'happy', 26)}</span>` : ''}<div class="msg ai${m.err ? ' err' : ''}">${m.err ? `${esc(m.text)}${k === chat.length - 1 && !chatBusy ? '<br><button class="retry" data-act="ask-retry">Try again</button>' : ''}` : aiHTML(splitFollow(m.text).text)}${m.cached && k === chat.length - 1 ? `<p class="cachednote">Saved answer · your numbers haven’t changed since. <button class="linkbtn" data-act="ask-fresh">Ask again</button></p>` : ''}</div>`).join('')
-    + (thinking ? `<div class="msg ai thinking"><i></i><i></i><i></i>${aiqText(chatState) ? `<span>${esc(aiqText(chatState))}</span>` : secs >= 4 ? `<span>Thinking… ${secs}s</span>` : ''}</div>` : '');
+    : `${pisoOn() ? `<div class="airow"><span class="pisoav" aria-hidden="true">${pisoSVG(m.err ? 'worried' : 'happy', 28)}</span>` : ''}<div class="msg ai${m.err ? ' err' : ''}">${m.err ? `${esc(m.text)}${k === chat.length - 1 && !chatBusy ? '<br><button class="retry" data-act="ask-retry">Try again</button>' : ''}` : aiHTML(splitFollow(m.text).text)}${m.cached && k === chat.length - 1 ? `<p class="cachednote">Saved answer · your numbers haven’t changed since. <button class="linkbtn" data-act="ask-fresh">Ask again</button></p>` : ''}</div>${pisoOn() ? '</div>' : ''}`).join('')
+    + (thinking ? `${pisoOn() ? `<div class="airow"><span class="pisoav" aria-hidden="true">${pisoSVG('calm', 28)}</span>` : ''}<div class="msg ai thinking"><i></i><i></i><i></i>${aiqText(chatState) ? `<span>${esc(aiqText(chatState))}</span>` : secs >= 4 ? `<span>Thinking… ${secs}s</span>` : ''}</div>${pisoOn() ? '</div>' : ''}` : '');
   const sg = $('chatSugg');
   if (sg) {
     const last = chat[chat.length - 1], busy = thinking || chatBusy || (last && last.live);
