@@ -1429,9 +1429,18 @@ async function aiStream(task, payload, onText) {
     }
   } catch (e) { if (!text) throw new Error('The AI took too long. Try again.'); }
   finally { clearTimeout(timer); }
+  const cut = /\n?\[\[cut:[A-Z_]*\]\]\s*$/.test(text) || looksCut(text);
+  text = text.replace(/\n?\[\[cut:[A-Z_]*\]\]\s*$/, '');
   if (!text.trim()) throw new Error('The AI didn’t answer. Try again.');
   aiOk = true; store.set('pera:aiOk', true);
+  aiStream.cut = cut;   // read right after the call (requests run one at a time)
   return text;
+}
+// an answer that stops mid-sentence ("…due on June 16, 20"): no closing punctuation, or it ends inside a number or bold
+function looksCut(t) {
+  const s = t.replace(/\n?\s*>>.*$/s, '').trimEnd(); if (!s) return false;
+  if ((s.match(/\*\*/g) || []).length % 2) return true;
+  return !/[.!?)”"’*:%]$/.test(s) && !/^\s*(?:[-*•]|\d+[.)])\s/.test(s.split('\n').pop());
 }
 async function ai(task, payload) {
   if (!sb || !user) throw new Error('Sign in first.');
@@ -1498,6 +1507,7 @@ const AI_RULES = 'You are Pera, a friendly money helper inside a personal financ
 const FOLLOW_RULE = '\n\nAfter the answer, on its own last line, write ">>" followed by 2 or 3 short follow-up questions the person might tap next, in their voice, separated by " | " (each under 45 characters, about their own money, answerable from the data). Example: >> How much should I save each payday? | What if I save ₱25,000 a month?';
 // split an answer into the text to show and the follow-up suggestions (also hides a half-written ">>" line while streaming)
 function splitFollow(t) {
+  t = t.replace(/\n?\[\[cut[^\]]*\]?\]?\s*$/, '');
   const k = t.search(/\n?\s*>>/); if (k < 0) return {text: t.replace(/\n\s*>?\s*$/, ''), sugg: []};
   return {text: t.slice(0, k).trimEnd(), sugg: t.slice(k).replace(/^\s*>>\s*/, '').split('|').map(x => x.trim().replace(/^["“]|["”]$/g, '')).filter(x => x && x.length < 70).slice(0, 3)};
 }
@@ -1561,12 +1571,14 @@ async function askPera(q, again, fresh) {
   const needRows = /\b(spent|spend|spending|bought|paid|grab|jollibee|shopee|lazada|food|transaction|entry|entries|where|which|list|biggest|most|cut|save|saving|savings|improve)/i.test(q);
   const msgs = chat.filter(m => !m.err).slice(-12).map(m => ({role: m.role, text: m.text})), live = {role: 'model', text: '', live: true};
   try {
-    const text = await aiQueue('Ask Pera', job => aiStream('ask', {system: AI_RULES + FOLLOW_RULE + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: msgs, maxTokens: 1200, think: 'low'}, t => {
+    const text = await aiQueue('Ask Pera', job => aiStream('ask', {system: AI_RULES + FOLLOW_RULE + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: msgs, maxTokens: 3000, think: 'low'}, t => {
       job.partial = true; chatState = null;
       if (!chat.includes(live)) chat.push(live);
       live.text = t; paintChat();
     }), st => { chatState = st; if (!chat.includes(live)) paintChat(true); });
-    if (first) { const c = store.get(ASKC) || {}; c[ck] = {text, at: Date.now()}; const keys = Object.keys(c).sort((a, b) => c[b].at - c[a].at); keys.slice(30).forEach(k => delete c[k]); store.set(ASKC, c); }
+    const cut = aiStream.cut; live.text = text;
+    if (cut) live.text = splitFollow(text).text + '\n\n*(Cut off. Tap Ask again or rephrase.)*';
+    if (first && !cut) { const c = store.get(ASKC) || {}; c[ck] = {text, at: Date.now()}; const keys = Object.keys(c).sort((a, b) => c[b].at - c[a].at); keys.slice(30).forEach(k => delete c[k]); store.set(ASKC, c); }
   } catch (e) { if (chat.includes(live) && live.text) live.text += '\n\n(cut off — try again)'; else chat.push({role: 'model', text: e.message, err: true}); }
   delete live.live; chatBusy = 0; chatState = null; clearInterval(chatTick); paintChat();
 }
@@ -1676,8 +1688,12 @@ async function writeAiCard(id) {
   const w = aiWriting[sp.key] = {text: '', st: null}; paintAiCards(sp.key);
   const had = !!aiSaved(sp.key); setPending(id, true);
   try {
-    const text = await aiQueue(sp.title, job => aiStream('card', {system: AI_RULES, maxTokens: 900, think: 'low', messages: [{role: 'user', text: sp.prompt()}]}, t => { job.partial = true; w.st = null; w.text = t; paintAiCards(sp.key); }),
+    const once = tokens => aiQueue(sp.title, job => aiStream('card', {system: AI_RULES, maxTokens: tokens, think: 'low', messages: [{role: 'user', text: sp.prompt()}]}, t => { job.partial = true; w.st = null; w.text = splitFollow(t).text; paintAiCards(sp.key); }).then(t => ({t, cut: aiStream.cut})),
       st => { w.st = st; if (!w.text) paintAiCards(sp.key); });
+    let r = await once(2500);
+    if (r.cut) { w.text = ''; w.st = {state: 'running'}; paintAiCards(sp.key); r = await once(5000); }   // stopped early: one more go with more room
+    if (r.cut) throw new Error('The AI stopped mid-answer twice. Tap Rewrite to try again.');
+    const text = r.t;
     delete aiWriting[sp.key]; setPending(id, false);
     saveAiNote(sp.key, {text, at: Date.now(), fp: dataFP()});
     paintAiCards(sp.key); toast(had ? `${sp.title} rewritten` : `${sp.title} written`);

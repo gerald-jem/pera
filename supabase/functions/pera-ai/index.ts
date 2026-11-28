@@ -76,7 +76,7 @@ Deno.serve(async (req) => {
       const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
       const out = new ReadableStream({
         async start(ctrl) {
-          const enc = new TextEncoder(); let buf = '';
+          const enc = new TextEncoder(); let buf = '', finish = '';
           try {
             for (;;) {
               const {value, done} = await reader.read(); if (done) break;
@@ -87,9 +87,12 @@ Deno.serve(async (req) => {
                   const d = JSON.parse(line.slice(5));
                   const text = (d?.candidates?.[0]?.content?.parts || []).filter((p: {thought?: boolean}) => !p.thought).map((p: {text?: string}) => p.text || '').join('');
                   if (text) ctrl.enqueue(enc.encode(text));
+                  if (d?.candidates?.[0]?.finishReason) finish = d.candidates[0].finishReason;
                 } catch { /* partial line */ }
               }
             }
+            // tell the app when Gemini stopped before finishing (ran out of room, safety stop…) so it doesn't keep a half answer
+            if (finish && finish !== 'STOP') ctrl.enqueue(enc.encode(`\n[[cut:${finish}]]`));
           } finally { ctrl.close(); }
         },
       });
