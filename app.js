@@ -1494,9 +1494,6 @@ function aiContext(opts = {}) {
   lastMonths(6).forEach(m => { const by = {}; spendingIn([m]).forEach(r => { if (r.cat !== 'Transfers') by[r.cat] = (by[r.cat] || 0) + r.a; }); L.push(`${m.y}-${String(m.i + 1).padStart(2, '0')}: ${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([c, v]) => `${c} ${Math.round(v)}`).join(', ') || 'none'}`); });
   // bills: exact totals worked out here so the AI doesn't add them up itself, plus which payday pays each one
   const un = (S.meta.bills || []).filter(b => !b.paid && b.due).sort((a, b) => a.due.localeCompare(b.due) || a.name.localeCompare(b.name) || a.a - b.a), ymS = m => `${m.y}-${String(m.i + 1).padStart(2, '0')}`;
-  const payFrom = due => { const d = new Date(due + 'T00:00'), y = d.getFullYear(), mo = d.getMonth(), last = new Date(y, mo + 1, 0).getDate(), p30 = Math.min(30, last);
-    const pick = d.getDate() >= p30 ? new Date(y, mo, p30) : d.getDate() >= 15 ? new Date(y, mo, 15) : new Date(y, mo, Math.min(30, new Date(y, mo, 0).getDate()) - new Date(y, mo, 0).getDate()) ;
-    return `${pick.getFullYear()}-${String(pick.getMonth() + 1).padStart(2, '0')}-${String(pick.getDate()).padStart(2, '0')}`; };
   if (un.length) {
     const byM = {}, byPay = {}; un.forEach(b => { const k = ymS(billMonth(b.due)), pf = payFrom(b.due); byM[k] = (byM[k] || 0) + +b.a; byPay[pf] = (byPay[pf] || 0) + +b.a; });
     L.push(`Unpaid bills total (exact, use as is): ${(un.reduce((t, b) => t + +b.a, 0)).toFixed(2)} across ${un.length} payments, last one due ${un[un.length - 1].due}.`);
@@ -1521,6 +1518,10 @@ const FACTS_AS_OF = '2026-11';
 const FACT_LIST = ['Inflation 7.8% (Oct 2026)', 'Pag-IBIG MP2 7.12% for 2025, tax-free', 'Maya Time Deposit Plus 3% base, up to 6%', 'PDIC insures ₱1M per depositor per bank', 'Bank interest: 20% final tax'];
 const factsAge = () => { const [y, m] = FACTS_AS_OF.split('-').map(Number), t = today(); return (t.getFullYear() - y) * 12 + t.getMonth() + 1 - m; };
 // money know-how the AI applies to the person's numbers (rules of thumb, plus Philippine facts with dates — check these when they change)
+// the payday that pays a bill: the last 15th or 30th (end of month in February) on or before the due date
+const payFrom = due => { const d = new Date(due + 'T00:00'), y = d.getFullYear(), mo = d.getMonth(), last = new Date(y, mo + 1, 0).getDate(), p30 = Math.min(30, last);
+  const pick = d.getDate() >= p30 ? new Date(y, mo, p30) : d.getDate() >= 15 ? new Date(y, mo, 15) : new Date(y, mo, Math.min(30, new Date(y, mo, 0).getDate()) - new Date(y, mo, 0).getDate()) ;
+  return `${pick.getFullYear()}-${String(pick.getMonth() + 1).padStart(2, '0')}-${String(pick.getDate()).padStart(2, '0')}`; };
 // worked out here so the AI explains numbers instead of doing arithmetic
 function planningLines(ser) {
   const past = ser.filter(p => p.past && !p.now && (p.inc || p.exp)).slice(-6); if (past.length < 2) return [];
@@ -1539,10 +1540,45 @@ function planningLines(ser) {
     `- Suggested savings target: ${r(target)}/month (the higher of 20% of ${baseName} or what they already save) = ${r(target / 2)} each payday.`,
     `- Suggested monthly spending cap, not counting scheduled bills: ${r(cap)} (${baseName} ${r(base)} − savings ${r(target)} − bills ${r(billsAvg)}); about ${r(cap / 2)} per pay period, ${r(cap / 30)}/day.`,
     `- 50/30/20 of ${baseName}: needs ${r(base * .5)}, wants ${r(base * .3)}, savings ${r(base * .2)}.`,
-    `- Emergency fund: ${r(liquid)} in withdrawable savings (plus ${r(locked)} locked in MP2) covers ${ess > 0 ? (liquid / ess).toFixed(1) : '?'} months of their usual spending (${r(ess)}/month).`];
+    `- Emergency fund: ${r(liquid)} in withdrawable savings (plus ${r(locked)} locked in MP2) covers ${ess > 0 ? (liquid / ess).toFixed(1) : '?'} months of their usual spending (${r(ess)}/month).`,
+    ...goalOptionLines(saved, ess),
+    ...paydayLines(base, target, cap)];
+}
+// for each goal, three honest ways to count what they already have — so the AI never counts the safety net as car money and then tells them to keep it
+function goalOptionLines(saved, spentAvg) {
+  const out = [], safety = spentAvg * 3, r = x => Math.round(x);
+  for (const g of goals()) {
+    const c = goalCalc(g); if (c.done || !(c.target > 0)) continue;
+    const opt = (label, have) => {
+      const left = Math.max(0, c.target - have), n = saved > 0 ? gMonths(have, c.target, saved, c.r) : Infinity;
+      const by = g.by ? Math.max(1, monthsTo(g.by)) : null, need = by ? gNeed(have, c.target, by, c.r) : null;
+      return `  · ${label}: starts at ${r(have)}, ${r(left)} to go; at their usual ${r(saved)}/month → ${isFinite(n) ? `${n} months (${inMonths(n)})` : 'not reachable'}${by ? `; to reach it by ${inMonths(by)} they'd need ${r(need)}/month (${r(need / 2)} per payday)` : ''}; for ${inMonths(12)} they'd need ${r(gNeed(have, c.target, 12, c.r))}/month.`;
+    };
+    out.push(`- Goal "${g.name}" (${r(c.target)}; counts ${c.src.label.toLowerCase()}${g.by ? `; wanted by ${g.by}` : ''}). Pick one option and stick to it; mention the others briefly:`,
+      opt('A) use everything already saved for it', c.cur),
+      opt(`B) keep 3 months of spending (${r(safety)}) as a safety net, use the rest`, Math.max(0, c.cur - safety)),
+      opt('C) keep all current savings as a safety net, start from zero', 0));
+  }
+  return out;
+}
+// the next paydays: pay, the bills paid from it, savings, and what's left to spend — flags tight ones
+function paydayLines(base, target, cap) {
+  const t = today(), days = [], un = (S.meta.bills || []).filter(b => !b.paid && b.due), r = x => Math.round(x);
+  for (let k = 0; days.length < 4 && k < 4; k++) {
+    const y = t.getFullYear(), m = t.getMonth() + k, last = new Date(y, m + 1, 0).getDate();
+    [15, Math.min(30, last)].forEach(d => { const dt = new Date(y, m, d); if (dt >= new Date(t.getFullYear(), t.getMonth(), t.getDate()) && days.length < 4) days.push(iso(dt)); });
+  }
+  if (!days.length || !(base > 0)) return [];
+  const per = base / 2, save = target / 2, usual = cap / 2;
+  return ['- Next paydays (pay ≈ half the monthly salary; savings = half the target; "left" = what remains to spend until the next payday):',
+    ...days.map(d => { const bills = un.filter(b => payFrom(b.due) === d), bt = bills.reduce((s, b) => s + +b.a, 0), left = per - save - bt;
+      return `  · ${d}: pay ${r(per)} − savings ${r(save)} − bills ${r(bt)}${bills.length ? ` (${bills.map(b => `${b.name} ${(+b.a).toFixed(2)} due ${b.due}`).join(', ')})` : ''} = ${r(left)} left${left < usual * 0.75 ? ` — TIGHT: below the usual ${r(usual)} per pay period; suggest saving less this payday or setting money aside from the payday before` : ''}`; })];
 }
 const FIN_KNOWLEDGE = `Money know-how to apply (use it with their numbers; name the method in a few words when you use one):
-- Spending cap / budget: never answer that none is set. Use "Pera's planning numbers": suggest the cap given there and explain it in one line (salary, or income when no salary is detected, minus savings target minus bills). Offer the 50/30/20 split (needs/wants/savings of take-home pay) as a cross-check, and pay-yourself-first: move savings on payday (15th and 30th) before spending.
+- How to answer: use the worked-out numbers in the data (never redo the arithmetic, never name the data sections like "planning numbers" — just say "based on your last 6 months"). Answer follow-ups in light of the conversation: if they just asked about a goal, "how much should I save each payday" means for that goal.
+- Goals: choose ONE of the given options (A/B/C) and stay consistent. Never count money toward a goal and in the same answer tell them to keep it as a safety net. Default to option B (keep 3 months as a safety net) unless they say otherwise, give its date and per-payday amount, and mention A and C in one line each.
+- Paydays: when asked how much to save or spend per payday, use the next-paydays lines; call out any payday marked TIGHT (a big bill on the same pay) and suggest what to do (save less that payday, or set aside from the payday before).
+- Spending cap / budget: never answer that none is set. Suggest the cap given in the data and explain it in one line (salary, or income when no salary is detected, minus savings target minus bills). Offer the 50/30/20 split (needs/wants/savings of take-home pay) as a cross-check, and pay-yourself-first: move savings on payday (15th and 30th) before spending.
 - Savings rate: 20% of take-home is a common floor; 30%+ is strong. Compare with their actual rate.
 - Emergency fund: 3–6 months of usual spending (6+ if income is irregular or one income supports others), kept somewhere withdrawable (savings account, time deposit that allows early withdrawal). MP2 is locked for 5 years, so it doesn't count.
 - Debt and PayLater: pay the full statement balance; BNPL/credit card interest and late fees cost far more than savings earn. Pay highest-rate debt first (avalanche) or smallest first for motivation (snowball). Treat PayLater installments as fixed bills when planning; avoid stacking new ones while old ones run.
