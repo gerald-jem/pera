@@ -1826,7 +1826,7 @@ function paintChat(thinking) {
       // they named a target and have no goal for it → offer to save it
       const amt = [...chat].reverse().filter(m => m.role === 'user').slice(0, 2).map(m => amtIn(m.text)).find(Boolean);
       const asked = chat.filter(m => m.role === 'user').slice(-2).map(m => m.text).join(' ');
-      if (amt && /goal|reach|save up|saving for|target|ipon/i.test(asked) && !/spend|buy|bili|afford|purchase|is that ok|pwede/i.test(asked) && !goals().some(g => Math.abs(+g.target - amt) < 1))
+      if (amt && /goal|reach|\bsave|saving|target|ipon/i.test(asked) && !/spend|buy|bili|afford|purchase|is that ok|pwede/i.test(asked) && !goals().some(g => Math.abs(+g.target - amt) < 1))
         extra = `<button class="chip act" data-act="ask-goal" data-a="${amt}">＋ Save ${esc(peso(amt))} as a goal</button>`;
     }
     sg.innerHTML = extra + qs.map(q => `<button class="chip" data-act="ask-q" data-q="${esc(q)}">${esc(q)}</button>`).join('');
@@ -2302,7 +2302,7 @@ function fundSheet(id) {
       <div><label for="fnDue">Needed by</label><input id="fnDue" type="month" value="${esc(f.due)}"></div>
       <div><label for="fnHave">Set aside so far</label><input id="fnHave" inputmode="decimal" value="${+f.have || 0}"></div></div>
     <button class="go" data-act="fund-save" data-id="${esc(id || '')}">Save</button>
-    ${id ? `<button class="ghost" data-act="fund-add" data-id="${esc(id)}" style="width:100%;margin-top:8px">Add this payday’s amount (${esc(peso(Math.ceil(fundPer(f).per)))})</button><button class="ghost dn" data-act="fund-del" data-id="${esc(id)}" style="width:100%;margin-top:8px">Delete</button>` : ''}`);
+    ${id ? `<button class="ghost" data-act="fund-add" data-id="${esc(id)}" style="width:100%;margin-top:8px">Add this payday’s amount (${esc(peso(Math.ceil(fundPer(f).per)))})</button><button class="ghost" data-act="fund-del" data-id="${esc(id)}" style="width:100%;margin-top:8px;color:var(--red)">Delete</button>` : ''}`);
 }
 
 /* ---- your year in review ---- */
@@ -2400,7 +2400,9 @@ function saveReminders() {
 async function remindToggle() {
   if (remindOn()) { store.set('pera:remind', false); try { const r = await navigator.serviceWorker.ready; if (r.periodicSync) await r.periodicSync.unregister('pera-reminders'); } catch {} toast('Reminders off'); return settings(); }
   if (!('Notification' in window)) return toast('This browser can’t show notifications.');
-  const perm = await Notification.requestPermission(); if (perm !== 'granted') return toast('Notifications are blocked. Allow them for Pera in your phone’s settings.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { store.set('pera:remindBlocked', true); settings(); return toast('Your phone is blocking Pera’s notifications. See the steps under Reminders.'); }
+  store.set('pera:remindBlocked', false);
   store.set('pera:remind', true); saveReminders();
   let bg = false;
   try { const r = await navigator.serviceWorker.ready; if (r.periodicSync) { const st = await navigator.permissions.query({name: 'periodic-background-sync'}); if (st.state === 'granted') { await r.periodicSync.register('pera-reminders', {minInterval: 12 * 3600e3}); bg = true; } } } catch {}
@@ -2976,12 +2978,13 @@ function settings() {
     <h2>Reminders</h2>
     <div class="switchrow"><span><b>Bills and paydays</b><br><span class="muted">${remindOn() ? (store.get('pera:remindBg') ? 'On. Your phone lets Pera check in the background about twice a day, so a reminder can come a few hours early or late.' : 'On while Pera is open. Install Pera to your home screen (and allow background activity) to get them when it’s closed.') : 'A notification two days before a bill is due, on the due date, and on paydays with how much to save.'}</span></span>
       <button class="switch" role="switch" aria-checked="${remindOn()}" data-act="remind" aria-label="Bill and payday reminders"></button></div>
+    ${!remindOn() && (store.get('pera:remindBlocked') || ('Notification' in window && Notification.permission === 'denied')) ? `<p class="stalenote">Notifications are blocked for Pera. To allow them: long-press the Pera icon on your home screen → <b>App info</b> → <b>Notifications</b> → turn on. (In Chrome instead: ⋮ → Settings → Site settings → Notifications → find Pera’s site → Allow.) Then come back and turn this on.</p>` : ''}
     <h2>App lock</h2>
     <div class="switchrow"><span><b>Lock with fingerprint</b><br><span class="muted">Asks for your fingerprint or face when you open Pera and after a minute away. This device only.</span></span>
       <button class="switch" role="switch" aria-checked="${!!lockState}" data-act="lock-toggle" aria-label="Lock with fingerprint"></button></div>
     <h2>Bills</h2>
-    <label for="payCut">Which month a bill counts in</label>
-    <select id="payCut">${[[15, 'Paid 15th & 30th: due on the 15th or later counts that month'], ...[5, 10, 20, 25].map(d => [d, `Due on the ${ord(d)} or later counts that month`]), [0, 'Always the month before it’s due']].map(([v, l]) => `<option value="${v}" ${payCut() === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+    <label for="payCut">A bill belongs to the month it’s due if it’s due on or after the…</label>
+    <select id="payCut">${[[15, '15th (best if you’re paid on the 15th & 30th)'], ...[5, 10, 20, 25].map(d => [d, ord(d)]), [0, 'Never: always the month before']].map(([v, l]) => `<option value="${v}" ${payCut() === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
     <p class="muted" id="payCutEx"></p>
     <h2>Bank statements</h2>
     <button class="go" data-act="statement">Import a bank statement</button>
@@ -2996,7 +2999,7 @@ function settings() {
     <h2>Install on your phone</h2>
     <p class="muted"><b>iPhone:</b> in Safari tap Share → Add to Home Screen.<br><b>Android:</b> in Chrome tap ⋮ → Install app (or Add to Home screen).</p>
     <button class="danger" data-act="signout">Sign out</button>`, () => {
-    const ex = () => { const c = payCut(); $('payCutEx').textContent = c ? `A bill due Jan ${c} counts in January; one due Jan ${Math.max(1, c - 10)} counts in December, paid from the 30th.` : 'A bill due Jan 16 counts in December.'; };
+    const ex = () => { const c = payCut(); $('payCutEx').textContent = c > 1 ? `Due Jan ${c}–31 → January. Due Jan 1–${c - 1} → December, so it’s paid from your Dec 30 pay.` : c === 1 ? 'Every bill counts in the month it’s due.' : 'Every bill counts in the month before it’s due, paid from that month’s pay.'; };
     ex();
     $('payCut').addEventListener('change', () => {
       const old = S.meta.payCut; S.meta.payCut = +$('payCut').value;
