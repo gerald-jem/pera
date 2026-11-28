@@ -1804,6 +1804,23 @@ function acctForm(j) {
   });
 }
 
+/* ---- show / hide password: an eye button on every password field, including ones added later ---- */
+const EYE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1A10.7 10.7 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a10 10 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+function addReveal(inp) {
+  if (inp.dataset.reveal) return; inp.dataset.reveal = '1';
+  const wrap = document.createElement('span'); wrap.className = 'pwwrap'; inp.parentNode.insertBefore(wrap, inp); wrap.appendChild(inp);
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'pweye'; btn.innerHTML = EYE; btn.setAttribute('aria-label', 'Show password'); btn.setAttribute('aria-pressed', 'false');
+  btn.addEventListener('click', () => {
+    const show = inp.type === 'password'; inp.type = show ? 'text' : 'password';
+    btn.innerHTML = show ? EYE_OFF : EYE; btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password'); btn.setAttribute('aria-pressed', String(show));
+    const end = inp.value.length; inp.focus(); try { inp.setSelectionRange(end, end); } catch {}
+  });
+  wrap.appendChild(btn);
+  inp.form && inp.form.addEventListener('submit', () => { inp.type = 'password'; btn.innerHTML = EYE; btn.setAttribute('aria-pressed', 'false'); });
+}
+document.querySelectorAll('input[type=password]').forEach(addReveal);
+new MutationObserver(() => document.querySelectorAll('input[type=password]:not([data-reveal])').forEach(addReveal)).observe(document.body, {childList: true, subtree: true});
 /* ---- look: theme, accent colour, colourful surfaces (this device) ---- */
 const ACCENTS = [['blue', 'Blue', '#2f7fd0'], ['teal', 'Teal', '#14a396'], ['purple', 'Purple', '#8b5cf6'], ['pink', 'Pink', '#e2468e'], ['orange', 'Orange', '#ea6a26'], ['green', 'Green', '#22a052']];
 const look = () => ({theme: 'system', accent: 'blue', style: 'plain', ...(store.get('pera:look') || {})});
