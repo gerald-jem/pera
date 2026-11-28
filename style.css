@@ -1,3 +1,12 @@
+/* fonts bundled with the app (no Google request, same look offline) */
+@font-face{font-family:'Literata';font-style:normal;font-weight:400 900;font-display:swap;src:url(vendor/fonts/literata-latin-opsz-normal.woff2) format('woff2-variations'),url(vendor/fonts/literata-latin-opsz-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Literata';font-style:normal;font-weight:400 900;font-display:swap;src:url(vendor/fonts/literata-latin-ext-opsz-normal.woff2) format('woff2-variations'),url(vendor/fonts/literata-latin-ext-opsz-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:'Inter';font-style:normal;font-weight:400;font-display:swap;src:url(vendor/fonts/inter-latin-400-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Inter';font-style:normal;font-weight:400;font-display:swap;src:url(vendor/fonts/inter-latin-ext-400-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:'Inter';font-style:normal;font-weight:500;font-display:swap;src:url(vendor/fonts/inter-latin-500-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Inter';font-style:normal;font-weight:500;font-display:swap;src:url(vendor/fonts/inter-latin-ext-500-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:'Inter';font-style:normal;font-weight:600;font-display:swap;src:url(vendor/fonts/inter-latin-600-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Inter';font-style:normal;font-weight:600;font-display:swap;src:url(vendor/fonts/inter-latin-ext-600-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
 /* Pera — pocket ledger. Prussian for money in, carmine for money out. */
 :root{color-scheme:light dark;--bg:#fff;--card:#f4f6f9;--ink:#10131a;--mute:#5b6472;--line:#e3e7ee;--blue:#0b4f8a;--red:#c1121f;--sheet:#fff;--on-blue:#fff}
 :root[data-theme=light]{color-scheme:light}
@@ -406,7 +415,8 @@ button:active:not(:disabled),.card:active,.chip:active{transform:scale(.97)}
 .chk.on span{display:inline-block;animation:pop .28s ease}
 .switch::after{transition:transform .2s cubic-bezier(.3,.7,.3,1.3)}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
-html,body{touch-action:pan-x pan-y}
+/* pinch-zoom allowed (accessibility); double-tap zoom off so quick taps don't zoom */
+html,body{touch-action:manipulation}
 #ef [hidden]{display:none!important}
 
 /* ---- reports ---- */
@@ -459,3 +469,7 @@ html,body{touch-action:pan-x pan-y}
 .srchbox input{padding-left:42px;font-size:17px}
 .srseg{margin-bottom:6px}.srseg button{font-size:13px}
 #monthDetail .trio .tile b,#sheetBody .trio .tile b{font-size:clamp(15px,4.6vw,19px);overflow:visible;text-overflow:clip;white-space:nowrap;letter-spacing:-.01em}@media (min-width:900px){#monthDetail .trio .tile b{font-size:clamp(14px,1.25vw,18px)}}
+
+.sr{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+main.app{display:block}header.top{display:flex}
+.ghost.wide{width:100%;margin-top:10px;border:1px solid var(--line);border-radius:12px;min-height:46px}

@@ -1496,9 +1496,14 @@ function bindTips() {   // tap / hover a mark to see its numbers (delegated, so 
 
 /* ================= sheet + toast ================= */
 let sheetOpen = false;
+function nameSheet() {   // a sheet is named by its title, for screen readers
+  const t = $('sheetBody').querySelector('h2'), sh = $('sheet');
+  if (t) { if (!t.id) t.id = 'sheetTitle'; sh.setAttribute('aria-labelledby', t.id); sh.removeAttribute('aria-label'); } else { sh.removeAttribute('aria-labelledby'); sh.setAttribute('aria-label', 'Details'); }
+}
+new MutationObserver(() => { if (sheetOpen) nameSheet(); }).observe($('sheetBody'), {childList: true});
 function openSheet(html, onReady) {
   sheetMonth = null; sheetPot = null; sheetBill = null;
-  $('sheetBody').innerHTML = html;
+  $('sheetBody').innerHTML = html; nameSheet();
   $('scrim').classList.add('on'); $('sheet').classList.add('on'); document.body.classList.add('locked');
   $('sheet').style.transform = ''; $('scrim').style.opacity = ''; $('sheet').classList.remove('tall');
   if (!sheetOpen && !(history.state && history.state.peraSheet)) history.pushState({peraSheet: 1}, '');   // phone Back closes it
@@ -1902,6 +1907,7 @@ function settings() {
       ${lastSynced ? `<br><span class="muted">Last synced ${esc(new Date(lastSynced).toLocaleString('en-PH', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}))}</span>` : ''}</div>
     ${syncErr && syncErr.auth ? '<button class="go" data-act="signout">Sign in again</button>' : ''}
     <button class="go" data-act="sync-now">Sync now</button>
+    <button class="ghost wide" data-act="change-pw">Change password</button>
     <h2>Look</h2>
     <label>Theme</label>
     <div class="seg lookseg">${[['system', 'Match phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => `<button data-act="look" data-k="theme" data-v="${k}" aria-pressed="${look().theme === k}">${l}</button>`).join('')}</div>
@@ -2604,6 +2610,7 @@ document.addEventListener('click', e => {
     case 'goal-new': return goalNew();
     case 'report': return reportSheet(d.r);
     case 'search': return searchSheet();
+    case 'change-pw': return newPasswordSheet(false);
     case 'sr-f': srch.f = d.k; document.querySelectorAll('[data-act=sr-f]').forEach(b => b.setAttribute('aria-pressed', b.dataset.k === d.k)); return runSearch();
     case 'rep-months': repState.months = +d.n; return reportSheet('trend');
     case 'cal-mv': { const c = repState.cal; const nd = new Date(c.y, c.i + +d.d, 1); repState.cal = {y: nd.getFullYear(), i: nd.getMonth()}; return reportSheet('cal'); }
@@ -2797,6 +2804,35 @@ $('authForm').addEventListener('submit', async e => {
   finally { $('authGo').disabled = false; }
 });
 
+$('authForgot').addEventListener('click', async () => {
+  const email = $('email').value.trim();
+  if (!/^\S+@\S+\.\S+$/.test(email)) { $('authErr').textContent = 'Type your email above first, then tap “Forgot password?” again.'; $('email').focus(); return; }
+  $('authForgot').disabled = true; $('authErr').textContent = '';
+  try {
+    const {error} = await sb.auth.resetPasswordForEmail(email, {redirectTo: location.origin + location.pathname});
+    if (error) throw error;
+    $('authMsg').textContent = `If ${email} has a Pera account, a reset link is on its way. Open it on this device to set a new password.`;
+  } catch (err) { $('authErr').textContent = /rate|seconds/i.test(err.message || '') ? 'Too many tries. Wait a minute, then try again.' : (err.message || 'Couldn’t send the email.'); }
+  finally { $('authForgot').disabled = false; }
+});
+function newPasswordSheet(fromLink) {
+  openSheet(`<div class="sheethead"><h2>${fromLink ? 'Set a new password' : 'Change password'}</h2><button type="button" class="ghost" data-act="close">${fromLink ? 'Later' : 'Cancel'}</button></div>
+    ${fromLink ? '<p class="muted">You opened a password reset link. Choose a new password for your account.</p>' : ''}
+    <form id="npF" novalidate><label for="npw">New password</label><input id="npw" type="password" autocomplete="new-password" minlength="6" required>
+    <p class="muted">At least 6 characters. Tap the eye to check what you typed.</p><div class="err" id="npErr" role="alert"></div>
+    <button class="go" type="submit">Save new password</button></form>`);
+  setTimeout(() => $('npw') && $('npw').focus(), 80);
+  $('npF').addEventListener('submit', async e => {
+    e.preventDefault();
+    const pw = $('npw').value; if (pw.length < 6) { $('npErr').textContent = 'Use at least 6 characters.'; return; }
+    const b = $('npF').querySelector('.go'); b.disabled = true; $('npErr').textContent = '';
+    try { const {error} = await sb.auth.updateUser({password: pw}); if (error) throw error; closeSheet(); toast('Password changed'); }
+    catch (err) { $('npErr').textContent = /different/i.test(err.message || '') ? 'Pick a password different from your old one.' : (err.message || 'Couldn’t change the password.'); }
+    finally { b.disabled = false; }
+  });
+}
+const recoveryLink = /type=recovery/.test(location.hash + location.search);
+
 async function start(u) {
   if (user && user.id === u.id) return;
   user = u; if (lockState) showLock(); loadLocal(); showMain(); render(); setSync(dirty.size ? 'saving' : 'idle');
@@ -2817,6 +2853,7 @@ if (!sb) {
       if (session && session.user) start(session.user);
       else if (ev === 'SIGNED_OUT') stop('Signed out. Sign in to see your money.');
       else if (ev === 'INITIAL_SESSION') stop();
+      if (ev === 'PASSWORD_RECOVERY' || (recoveryLink && session && ev !== 'SIGNED_OUT' && !window.__recShown)) { window.__recShown = true; history.replaceState(null, '', location.pathname); setTimeout(() => newPasswordSheet(true), 400); }
     }, 0);
   });
 }
