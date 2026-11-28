@@ -56,5 +56,50 @@ const meta = M.merge3('meta', {goals: [{id: 'g1', name: 'A'}], payCut: 15}, {goa
 eq('goals merged item by item', meta.goals.map(g => g.id).sort(), ['g1', 'g2', 'g3']);
 eq('plain settings: the changed side wins', meta.payCut, 16);
 
+/* uneven paydays */
+const sal = n => /payroll/i.test(n), T = new Date(2026, 10, 28);   // Nov 28, 2026
+const payE = []; for (let m = 4; m <= 9; m++) {                     // May–Oct
+  payE.push({d: M.iso(new Date(2026, m, 15)), a: 20000, n: 'INREM PAYROLL'});
+  payE.push(m % 2 ? {d: M.iso(new Date(2026, m + 1, 1)), a: 44000, n: 'INREM PAYROLL'} : {d: M.iso(new Date(2026, m, 30)), a: 44000, n: 'INREM PAYROLL'}); }   // the 30th's pay sometimes lands on the 1st
+eq('15th vs 30th, even when the 30th pay lands on the 1st', M.paySlots(payE, T, sal), {mid: 20000, end: 44000});
+eq('not salary: ignored', M.paySlots([...payE, {d: '2026-10-16', a: 999, n: 'Refund'}], T, sal), {mid: 20000, end: 44000});
+eq('too little history: no split', M.paySlots(payE.slice(-2), T, sal), null);
+
+/* paydays until a month */
+eq('paydays from Nov 28 until December', M.paydaysUntil('2026-12', T), 1);          // Nov 30
+eq('…until March (Nov 30, Dec 15, Dec 30, Jan 15, Jan 30, Feb 15, Feb 28)', M.paydaysUntil('2027-03', T), 7);
+
+/* home loan */
+near('₱2.5M at 4.5% for 30 years ≈ ₱12,667 (Pag-IBIG’s own example)', M.amort(2500000, 4.5, 30), 12667, 1);
+near('balance after all payments is zero', M.loanLeft(1000000, 6, 10, 120), 0, 0.01);
+near('zero interest: straight split', M.amort(120000, 0, 1), 10000, 0.001);
+
+/* subscriptions */
+const nameOf = n => /netflix/i.test(n) ? 'Netflix' : /spotify/i.test(n) ? 'Spotify' : /grab/i.test(n) ? 'Grab' : /shop/i.test(n) ? 'Shop' : null, known = n => /netflix|spotify/i.test(n);
+const subRows = [];
+[5, 6, 7, 8, 9, 10].forEach(i => { const d = `2026-${String(i + 1).padStart(2, '0')}`;
+  subRows.push({n: 'NETFLIX.COM', a: i < 10 ? 549 : 619, y: '2026', i, d: d + '-07'}, {n: 'SPOTIFY', a: 149, y: '2026', i, d: d + '-12'});
+  for (let k = 0; k < 6; k++) subRows.push({n: 'GRAB ' + k, a: 100 + k * 37, y: '2026', i, d: d + '-0' + (k + 1)});      // many rides: not a subscription
+  subRows.push({n: 'SHOP X', a: 300 + i * 200, y: '2026', i, d: d + '-20'}); });                                            // monthly but the price swings
+const subs = M.detectSubs(subRows, nameOf, known);
+eq('finds the subscriptions only', subs.map(x => x.name), ['Netflix', 'Spotify']);
+eq('flags Netflix going up by ₱70', [subs[0].up, subs[0].before, subs[0].next], [70, 549, '2026-12-07']);
+
+/* bills: ids from name + due date, the same on every phone */
+const phoneA = [{name: 'SPayLater', a: 100, due: '2026-12-05'}, {name: 'Lazada PayLater', a: 50, due: '2026-12-16'}];
+const phoneB = JSON.parse(JSON.stringify(phoneA));
+M.ensureBillIds(phoneA); M.ensureBillIds(phoneB);
+eq('two phones give the same ids', phoneA.map(b => b.id), phoneB.map(b => b.id));
+const twins = [{name: 'X', due: '2026-01-01'}, {name: 'X', due: '2026-01-01'}]; M.ensureBillIds(twins);
+eq('identical bills still get different ids', twins[0].id !== twins[1].id, true);
+// first sync after ids: the old copy has no ids → whole-list rule, nothing duplicated
+const baseNoIds = [{name: 'SPayLater', a: 100, due: '2026-12-05'}];
+eq('first sync after ids: no duplicates', M.merge3('meta', {bills: baseNoIds}, {bills: phoneA}, {bills: phoneB}).bills.length, 2);
+// afterwards: paid on one phone, a new bill on the other → both kept
+const base2 = JSON.parse(JSON.stringify(phoneA)), l2 = JSON.parse(JSON.stringify(phoneA)), r2 = JSON.parse(JSON.stringify(phoneA));
+l2[0].paid = true; r2.push({id: 'bnew', name: 'Meralco', a: 2000, due: '2026-12-20'});
+const m2 = M.merge3('meta', {bills: base2}, {bills: l2}, {bills: r2}).bills;
+eq('paid here + added there: both kept', [m2.length, m2.find(b => b.name === 'SPayLater').paid], [3, true]);
+
 console.log('errors', JSON.stringify(errors));
 process.exit(errors.length ? 1 : 0);

@@ -64,7 +64,7 @@ const kBase = () => 'pera:base:' + user.id;      // last copy agreed with the se
 const kSnaps = () => 'pera:snaps:' + user.id;    // safety copies kept on this device
 let base = {};
 let dataVer = 0;
-function saveLocal() { dataVer++; carveCache = null; if (typeof saveReminders === 'function') saveReminders(); store.set(kData(), S); store.set(kDirty(), [...dirty]); store.set(kBase(), base); }
+function saveLocal() { if (S && S.meta && PM.ensureBillIds(S.meta.bills)) dirty.add('meta'); dataVer++; carveCache = null; if (typeof saveReminders === 'function') saveReminders(); store.set(kData(), S); store.set(kDirty(), [...dirty]); store.set(kBase(), base); }
 function loadLocal() {
   const d = store.get(kData()); S = d && d.meta ? d : blank();
   dirty = new Set(store.get(kDirty()) || []);
@@ -294,7 +294,7 @@ function renderHome(ser) {
   const prev = ser[ser.indexOf(cur) - 1];
   if (prev) { const d = cur.total - prev.total; $('homeChg').innerHTML = `<span class="${d >= 0 ? 'up' : 'dn'}">${d >= 0 ? '▲' : '▼'} ${esc(peso(Math.abs(d)))}</span> vs ${esc(M[prev.i])}`; }
   else $('homeChg').textContent = '';
-  homeMonth(cur, prev); yearCard(); plan13Card(); homeFlow(); homeBills(); homeNotes(cur, ser); homeSummary();
+  homeMonth(cur, prev); yearCard(); plan13Card(); homeFlow(); homeBills(); homeNotes(cur, ser); homeSummary(); applyHomeHide();
   $('homeList').innerHTML = '';
   const ml = $('homeMonthLink'); ml.hidden = false; ml.dataset.y = cur.y; ml.dataset.i = cur.i;
   ml.textContent = `See all of ${M[cur.i]}’s entries →`;
@@ -338,10 +338,10 @@ function pisoSVG(mood = 'happy', size = 56) {
 function pisoNow() {
   const h = today().getHours ? new Date().getHours() : 12, L = leftToSpend(), P = L && L.P, md = d => fmtDate(d, {month: 'short', day: 'numeric'});
   if (pisoReact && Date.now() < pisoReact.until) return pisoReact;
-  if (h >= 23 || h < 5) return {mood: 'sleepy', line: L ? `Late na! ${peso(Math.max(0, L.left))} left until ${md(L.next)}. Sleep on any big buys.` : 'Late na! Rest muna.'};
+  const ds = dueSoon()[0]; if (ds) { const n = daysBetween(todayIso(), ds.due); return {mood: 'worried', line: `${ds.name} ${peso(+ds.a)} is due ${n === 0 ? 'today' : n === 1 ? 'tomorrow' : `on ${md(ds.due)}`}. Tap Paid below once it’s done.`}; }
+  if (h >= 23 || h < 5) return {mood: 'sleepy', line: !L ? 'Late na! Rest muna.' : L.left < 0 ? `Late na! We’re ${peso(-L.left)} over until ${md(L.next)}. No late-night carts tonight.` : `Late na! ${peso(L.left)} left until ${md(L.next)}. Sleep on any big buys.`};
   if (!L) return {mood: 'calm', line: 'Add a couple of months of entries and I’ll keep an eye on your budget.'};
   const tight = P ? paydayData(P.base, P.target, P.cap).find(x => x.tight && daysBetween(todayIso(), x.date) <= 10) : null;
-  const ds = dueSoon()[0]; if (ds) { const n = daysBetween(todayIso(), ds.due); return {mood: 'worried', line: `${ds.name} ${peso(+ds.a)} is due ${n === 0 ? 'today' : n === 1 ? 'tomorrow' : `on ${md(ds.due)}`}. Tap Paid below once it’s done.`}; }
   if (L.left < 0) return {mood: 'worried', line: `We’re ${peso(-L.left)} over this pay period. Let’s keep it light until ${md(L.next)}.`};
   const su = subscriptions().find(x => x.up && daysBetween(x.last, todayIso()) <= 40); if (su) return {mood: 'wince', line: `${su.name} went up to ${peso(su.monthly, 2)} (was ${peso(su.before, 2)}). Still worth it?`};
   if (tight) return {mood: 'worried', line: `Heads up: ${md(tight.date)} pays ${peso(tight.bt)} in bills. Set a little aside before then.`};
@@ -382,6 +382,11 @@ function pisoAdded(kind, a, note) {
   setTimeout(() => { pisoSay(pisoNow()); }, 60);
   setTimeout(() => { if (pisoReact && Date.now() >= pisoReact.until) { pisoReact = null; pisoSay(pisoNow()); } }, 7100);
 }
+
+/* ---- Customise Home: hide cards you don't use (this device) ---- */
+const HOME_CARDS = [['left', 'Left to spend until payday', '.leftbox'], ['hFlow', 'Income vs spending', '#hFlow'], ['hBills', 'Coming up (bills)', '#hBills'], ['hNotes', 'Insights', '#hNotes'], ['hSum', 'AI monthly summary', '#hSum'], ['h13', '13th month plan (Nov–Jan)', '#h13'], ['hYear', 'Year in review (Dec–Jan)', '#hYear']];
+const homeHidden = () => new Set(store.get('pera:homeHide') || []);
+function applyHomeHide() { const h = homeHidden(); HOME_CARDS.forEach(([k, , sel]) => document.querySelectorAll(sel).forEach(el => el.classList.toggle('userhid', h.has(k)))); }
 
 /* ---- left to spend until the next payday (paid on the 15th and the 30th / end of month) ---- */
 function payPeriod(t = today()) {
@@ -859,7 +864,15 @@ function tdCycle(pot, c) {
 // monthly payout accounts: interest = daily balance × rate × (1 − tax) ÷ 365, paid in on the 1st (and at maturity),
 // then earning interest itself. Matches Maya's statement to the centavo.
 const tdMonthlyOn = p => p.monthly ?? ((p.cycles || []).some(c => (c.credits || []).length) || /maya/i.test(p.name || ''));
-const tdPayouts = (pot, c, rate, tax, end) => PM.tdPayouts(c, rate, tax, end, todayIso());
+// remembered until the data changes: the forecast and net worth ask for the same cycles many times per screen
+let tdPayCache = {v: -1, m: new Map()};
+function tdPayouts(pot, c, rate, tax, end) {
+  if (tdPayCache.v !== dataVer) tdPayCache = {v: dataVer, m: new Map()};
+  const sum = l => (l || []).reduce((s, x) => s + (+x.a || 0) * 1 + (x.date ? x.date.length : 0), 0);
+  const key = [c.start, +c.carry || 0, (c.deposits || []).length, sum(c.deposits), (c.deposits || []).map(x => x.date).join(','), (c.credits || []).map(x => x.date + ':' + x.a).join(','), rate, tax, end, todayIso()].join('|');
+  let r = tdPayCache.m.get(key); if (!r) { r = PM.tdPayouts(c, rate, tax, end, todayIso()); tdPayCache.m.set(key, r); }
+  return r;
+}
 const tdCurrent = pot => { const t = todayIso(), cs = pot.cycles || []; let k = cs.length - 1; for (let i = 0; i < cs.length; i++) if (cs[i].start <= t) k = i; return Math.max(0, k); };
 
 /* ---- MP2: dividend = rate × average monthly balance, credited each year end, 5-year term ---- */
@@ -1666,7 +1679,7 @@ function aiContext(opts = {}) {
 }
 // when the Philippine facts below were last checked — update FACT_LIST and this date together (Settings shows a reminder after 6 months)
 const FACTS_AS_OF = '2026-11';
-const FACT_LIST = ['Inflation 7.8% (Oct 2026)', 'Pag-IBIG MP2 7.12% for 2025, tax-free', 'Maya Time Deposit Plus 3% base, up to 6%', 'PDIC insures ₱1M per depositor per bank', 'Bank interest: 20% final tax', '13th month + bonuses tax-free up to ₱90,000 a year'];
+const FACT_LIST = ['Pag-IBIG housing loan promo 4.5%/5.75% until Dec 31, 2026', 'Inflation 7.8% (Oct 2026)', 'Pag-IBIG MP2 7.12% for 2025, tax-free', 'Maya Time Deposit Plus 3% base, up to 6%', 'PDIC insures ₱1M per depositor per bank', 'Bank interest: 20% final tax', '13th month + bonuses tax-free up to ₱90,000 a year'];
 const factsAge = () => { const [y, m] = FACTS_AS_OF.split('-').map(Number), t = today(); return (t.getFullYear() - y) * 12 + t.getMonth() + 1 - m; };
 // money know-how the AI applies to the person's numbers (rules of thumb, plus Philippine facts with dates — check these when they change)
 // the payday that pays a bill: the last 15th or 30th (end of month in February) on or before the due date
@@ -1726,21 +1739,10 @@ function goalOptionLines(saved, spentAvg) {
 }
 // the next paydays: pay, the bills paid from it, savings, and what's left to spend — flags tight ones
 // salary actually received on each payday (around the 15th vs the 30th), from the last 6 finished months
+// salary actually received on each payday (around the 15th vs the 30th) — see money.js
 function payBySlot() {
-  const t = today(), mid = [], end = [];
-  for (let k = 1; k <= 6; k++) {
-    const d = new Date(t.getFullYear(), t.getMonth() - k, 1), y = String(d.getFullYear()), i = d.getMonth(), m = (S.years[y] || [])[i]; if (!m) continue;
-    let a = 0, b = 0;
-    m.inc.forEach(x => { if (!x.d || !SALARY_RE.test(x.n || '')) return; const day = +x.d.slice(8, 10), mo = +x.d.slice(5, 7) - 1;
-      if (day >= 10 && day <= 22) a += +x.a; else if (day >= 23 || mo !== i) b += +x.a; });
-    // pay that lands on the 1st–5th belongs to the month before's 30th
-    const nx = new Date(+y, i + 1, 1), nm = (S.years[String(nx.getFullYear())] || [])[nx.getMonth()];
-    if (nm) nm.inc.forEach(x => { if (x.d && SALARY_RE.test(x.n || '') && +x.d.slice(8, 10) <= 5) b += +x.a; });
-    m.inc.forEach(x => { if (x.d && SALARY_RE.test(x.n || '') && +x.d.slice(8, 10) <= 5) b -= +x.a; });
-    if (a > 0) mid.push(a); if (b > 0) end.push(b);
-  }
-  const avg = l => l.length ? l.reduce((s, x) => s + x, 0) / l.length : 0;
-  return mid.length >= 2 && end.length >= 2 ? {mid: avg(mid), end: avg(end)} : null;
+  const all = []; for (const y of Object.keys(S.years)) S.years[y].forEach(m => m.inc.forEach(x => all.push(x)));
+  return PM.paySlots(all, today(), n => SALARY_RE.test(n));
 }
 function paydayData(base, target, cap) {
   const t = today(), days = [], un = (S.meta.bills || []).filter(b => !b.paid && b.due);
@@ -2236,24 +2238,30 @@ function worthSVG(svg, hist) {
 }
 
 /* ---- home loan planner (Pag-IBIG) ---- */
-const HOME_RATES = [[4.5, '4.5% · Pag-IBIG promo, loans up to ₱2.5M, fixed 3 yrs (apply by Dec 31, 2026)'], [5.75, '5.75% · promo for ₱2.5M–₱10M, fixed 3 yrs (apply by Dec 31, 2026)'], [6.25, '6.25% · regular, reprices every 3 years'], [9.75, '9.75% · regular, fixed for 30 years']];
-const amort = (P, ratePct, years) => { const r = ratePct / 100 / 12, n = years * 12; return r > 0 ? P * r / (1 - (1 + r) ** -n) : P / n; };
+const PROMO_UNTIL = '2026-12-31';   // Pag-IBIG promo rates are for applications received by this date
+const HOME_RATES_ALL = [[4.5, '4.5% · Pag-IBIG promo, loans up to ₱2.5M, fixed 3 yrs (apply by Dec 31, 2026)', true], [5.75, '5.75% · promo for ₱2.5M–₱10M, fixed 3 yrs (apply by Dec 31, 2026)', true], [6.25, '6.25% · regular, reprices every 3 years'], [9.75, '9.75% · regular, fixed for 30 years']];
+const promoOn = () => todayIso() <= PROMO_UNTIL;
+const homeRates = () => HOME_RATES_ALL.filter(x => !x[2] || promoOn());
+const {amort, loanLeft} = PM;
 function homeSheetHTML() {
-  const h = {price: 3000000, down: 20, rate: 4.5, years: 30, ...(S.meta.homePlan || {})};
+  const h = {price: 3000000, down: 20, rate: promoOn() ? 4.5 : 6.25, years: 30, ...(S.meta.homePlan || {})};
+  if (!promoOn() && (h.rate === 4.5 || h.rate === 5.75)) h.rate = 6.25;
   return `<div class="sheethead"><h2>Home loan planner</h2><button type="button" class="ghost" data-act="close">Done</button></div>
-    <p class="muted">A rough plan for a Pag-IBIG housing loan. Rates as of Nov 2026; check the current ones before applying.</p>
+    <p class="muted">A rough plan for a Pag-IBIG housing loan. Rates as of Nov 2026; check the current ones before applying.${promoOn() ? '' : ' The 2026 promo rates have ended, so only regular rates are shown.'}</p>
     <div class="hlgrid"><div><label for="hlPrice">House price</label><input id="hlPrice" inputmode="decimal" value="${h.price}"></div>
       <div><label for="hlDown">Down payment (%)</label><input id="hlDown" inputmode="decimal" value="${h.down}"></div>
       <div><label for="hlYears">Years to pay</label><input id="hlYears" inputmode="numeric" value="${h.years}"></div></div>
-    <label for="hlRate">Interest rate</label><select id="hlRate">${HOME_RATES.map(([v, l]) => `<option value="${v}" ${+h.rate === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}${HOME_RATES.some(([v]) => v === +h.rate) ? '' : `<option value="${h.rate}" selected>${h.rate}%</option>`}</select>
+    <label for="hlRate">Interest rate</label><select id="hlRate">${homeRates().map(([v, l]) => `<option value="${v}" ${+h.rate === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}${homeRates().some(([v]) => v === +h.rate) ? '' : `<option value="${h.rate}" selected>${h.rate}%</option>`}</select>
     <div id="hlOut" aria-live="polite"></div>`;
 }
+let homeSaveT = null;
 function homeCalc() {
   const n = id => +((($(id) || {}).value || '').replace(/[^\d.]/g, '')) || 0;
   const price = n('hlPrice'), down = Math.min(100, n('hlDown')), years = Math.min(30, Math.max(1, n('hlYears') || 30)), rate = +$('hlRate').value;
   const dp = price * down / 100, loan = price - dp, m = amort(loan, rate, years), P = planNumbers();
-  S.meta.homePlan = {price, down, rate, years};
-  const after = rate < 6.25 ? amort(loan * Math.pow(1 + rate / 1200, 36) - amort(loan, rate, years) * ((Math.pow(1 + rate / 1200, 36) - 1) / (rate / 1200)), 6.25, years - 3) : null;
+  const hp = {price, down, rate, years};
+  if (J(hp) !== J(S.meta.homePlan || null)) { S.meta.homePlan = hp; clearTimeout(homeSaveT); homeSaveT = setTimeout(() => { dirty.add('meta'); saveLocal(); push(); }, 1200); }
+  const after = rate < 6.25 && years > 3 ? amort(loanLeft(loan, rate, years, 36), 6.25, years - 3) : null;   // after the 3 fixed years
   const gross = m / 0.35, pctTake = P && P.base ? m / P.base * 100 : null;
   const n2 = P && P.saved > 0 ? gMonths(0, dp, P.saved, 0.048 / 12) : null;
   $('hlOut').innerHTML = `<div class="trio" style="margin-top:14px"><div class="tile"><span>Down payment</span><b>${esc(pesoS(dp))}</b></div><div class="tile"><span>Loan</span><b>${esc(pesoS(loan))}</b></div><div class="tile"><span>Monthly</span><b>${esc(pesoS(m))}</b></div></div>
@@ -2273,14 +2281,7 @@ function homeSheet() {
 
 /* ---- set aside for known costs (sinking funds): Christmas, insurance, gadgets ---- */
 const funds = () => S.meta.funds || [];
-function paydaysUntil(ym) {   // paydays from today up to the end of the month before it's due
-  const t = today(), [y, m] = ym.split('-').map(Number), stop = new Date(y, m - 1, 1); let n = 0;
-  for (let d = new Date(t.getFullYear(), t.getMonth(), 1); d < stop; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
-    const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-    [15, Math.min(30, last)].forEach(dd => { const x = new Date(d.getFullYear(), d.getMonth(), dd); if (x >= new Date(t.getFullYear(), t.getMonth(), t.getDate()) && x < stop) n++; });
-  }
-  return n;
-}
+const paydaysUntil = ym => PM.paydaysUntil(ym, today());
 const fundPer = f => { const left = Math.max(0, +f.target - (+f.have || 0)), n = paydaysUntil(f.due); return {left, n, per: n ? left / n : left}; };
 function fundsHTML() {
   const fs = funds(), total = fs.reduce((s, f) => s + fundPer(f).per, 0), ym = d => new Date(+d.slice(0, 4), +d.slice(5) - 1).toLocaleDateString('en-PH', {month: 'short', year: 'numeric'});
@@ -2353,22 +2354,8 @@ const SUB_RE = /netflix|spotify|youtube|apple\.com|itunes|icloud|google|disney|v
 let subsCache = {v: -1, list: []};
 function subscriptions() {
   if (subsCache.v === dataVer) return subsCache.list;
-  const ms = lastMonths(7), rows = spendingIn(ms).filter(r => r.a > 0 && !r.bill && r.cat !== 'Transfers' && !r.saved), g = {};
-  rows.forEach(r => { const m = merchantOf(r.n); if (!m) return; (g[m] = g[m] || []).push(r); });
-  const med = a => { const b = a.slice().sort((x, y) => x - y), k = b.length >> 1; return b.length % 2 ? b[k] : (b[k - 1] + b[k]) / 2; };
-  const out = [];
-  for (const [name, list] of Object.entries(g)) {
-    const months = new Set(list.map(r => `${r.y}-${r.i}`)), known = list.some(r => SUB_RE.test(r.n));
-    if (months.size < (known ? 2 : 3) || list.length > months.size * 2) continue;          // repeats monthly, not several times a month
-    const byDate = list.slice().sort((a, b) => (a.d || `${a.y}-${String(a.i + 1).padStart(2, '0')}-15`).localeCompare(b.d || `${b.y}-${String(b.i + 1).padStart(2, '0')}-15`));
-    const amts = byDate.map(r => +r.a), m = med(amts), spread = med(amts.map(a => Math.abs(a - m))) / m;
-    if (spread > (known ? 0.35 : 0.12)) continue;                                            // a fairly fixed price
-    const last = byDate[byDate.length - 1], prev = amts.slice(0, -1), before = prev.length ? med(prev) : m, up = last.a - before;
-    const lastD = last.d || `${last.y}-${String(last.i + 1).padStart(2, '0')}-15`, nd = new Date(dnum(lastD)); nd.setMonth(nd.getMonth() + 1);
-    out.push({name, monthly: +last.a, year: +last.a * 12, last: lastD, next: iso(nd), count: list.length, up: up >= Math.max(5, before * 0.03) ? up : 0, before, cat: last.cat, known});
-  }
-  out.sort((a, b) => b.monthly - a.monthly);
-  subsCache = {v: dataVer, list: out}; return out;
+  const rows = spendingIn(lastMonths(7)).filter(r => r.a > 0 && !r.bill && r.cat !== 'Transfers' && !r.saved);
+  subsCache = {v: dataVer, list: PM.detectSubs(rows, n => merchantOf(n), n => SUB_RE.test(n))}; return subsCache.list;
 }
 function subsHTML() {
   const L = subscriptions(), tot = L.reduce((s, x) => s + x.monthly, 0), md = d => fmtDate(d, {month: 'short', day: 'numeric'});
@@ -2384,7 +2371,7 @@ const remindOn = () => store.get('pera:remind') === true;
 function reminderList() {
   const out = [], t = todayIso(), until = addDays(t, 21), md = d => fmtDate(d, {month: 'short', day: 'numeric'});
   (S.meta.bills || []).filter(b => !b.paid && b.due && b.due >= t && b.due <= until).forEach(b => {
-    const k = `${b.name}|${b.due}|${b.a}`;
+    const k = `${b.id || b.name}|${b.due}`;   // editing the amount doesn't make it a new reminder
     out.push({id: 'b2|' + k, date: addDays(b.due, -2), title: `${b.name} due ${md(b.due)}`, body: `${peso(+b.a, 2)} in 2 days. Open Pera to mark it paid.`});
     out.push({id: 'b0|' + k, date: b.due, title: `${b.name} is due today`, body: `${peso(+b.a, 2)}. Mark it paid in Pera when done.`});
   });
@@ -2975,6 +2962,9 @@ function settings() {
       <button class="switch" role="switch" aria-checked="${look().style === 'colorful'}" data-act="look" data-k="style" data-v="${look().style === 'colorful' ? 'plain' : 'colorful'}" aria-label="Colourful"></button></div>
     <div class="switchrow"><span><b>Piso, the coin buddy</b><br><span class="muted">Shows how your budget is doing and reacts when you add entries.</span></span>
       <button class="switch" role="switch" aria-checked="${pisoOn()}" data-act="look" data-k="mascot" data-v="${pisoOn() ? 'off' : 'on'}" aria-label="Piso, the coin buddy"></button></div>
+    <h2>Home screen</h2>
+    <p class="muted">Choose the cards you want on Home. This phone only.</p>
+    ${HOME_CARDS.map(([k, l]) => `<div class="switchrow"><span>${esc(l)}</span><button class="switch" role="switch" aria-checked="${!homeHidden().has(k)}" data-act="home-card" data-k="${k}" aria-label="Show ${esc(l)}"></button></div>`).join('')}
     <h2>Reminders</h2>
     <div class="switchrow"><span><b>Bills and paydays</b><br><span class="muted">${remindOn() ? (store.get('pera:remindBg') ? 'On. Your phone lets Pera check in the background about twice a day, so a reminder can come a few hours early or late.' : 'On while Pera is open. Install Pera to your home screen (and allow background activity) to get them when it’s closed.') : 'A notification two days before a bill is due, on the due date, and on paydays with how much to save.'}</span></span>
       <button class="switch" role="switch" aria-checked="${remindOn()}" data-act="remind" aria-label="Bill and payday reminders"></button></div>
@@ -3855,6 +3845,7 @@ document.addEventListener('click', e => {
     case 'ask-q': return askPera(d.q);
     case 'cap-set': return capSheet();
     case 'remind': return remindToggle();
+    case 'home-card': { const h = homeHidden(); h.has(d.k) ? h.delete(d.k) : h.add(d.k); store.set('pera:homeHide', [...h]); applyHomeHide(); const b = $('sheetBody').querySelector(`[data-act=home-card][data-k="${d.k}"]`); if (b) b.setAttribute('aria-checked', String(!h.has(d.k))); return; }
     case 'hl-goal': closeSheet(); return goalNew(+d.a, 'House down payment');
     case 'yr-share': { const t = yearShare; if (navigator.share) navigator.share({text: t}).catch(() => {}); else navigator.clipboard.writeText(t).then(() => toast('Copied, paste it anywhere')).catch(() => toast(t)); return; }
     case 'fund-new': return fundSheet();

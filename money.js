@@ -76,6 +76,7 @@
   function mergeById(b, l, r, hasBase) {
     if (!Array.isArray(l) || !Array.isArray(r)) return pick(b, l, r, hasBase);
     if (![...l, ...r].every(x => x && x.id != null)) return pick(b, l, r, hasBase);   // can't match items without ids
+    if (hasBase && Array.isArray(b) && b.some(x => x && x.id == null)) return pick(b, l, r, hasBase);   // last sync was before ids existed
     const bm = new Map((b || []).map(x => [x.id, x])), lm = new Map(l.map(x => [x.id, x])), rm = new Map(r.map(x => [x.id, x])), out = [];
     // server order first, then anything only here, in this device's order
     const ids = [...new Set([...r.map(x => x.id), ...l.map(x => x.id)])];
@@ -87,7 +88,7 @@
     }
     return out;
   }
-  const LISTS = ['savings', 'goals'];   // meta lists merged item by item (bills have no ids yet, so they're merged as a whole)
+  const LISTS = ['savings', 'goals', 'bills', 'funds'];   // meta lists merged item by item
   function mergeMonth(b, l, r, hasBase) {
     if (!l) return r; if (!r) return l;
     const bb = hasBase ? b || {} : {};
@@ -113,6 +114,63 @@
     return {months: Array.from({length: 12}, (_, i) => mergeMonth(bm[i], lm[i], rm[i], hasBase) || {inc: [], exp: [], sav: 0})};
   }
 
-  const api = {DAYMS, iso, mkDate, dnum, addDays, daysBetween, billMonth, tdPayouts, carvePlan, J, pick, mergeById, merge3};
+  /* ---- uneven paydays: usual salary on the 15th vs the 30th, from the last 6 finished months ----
+     Goes by each payment's date: the 10th–22nd is the 15th's pay; the 23rd to month end, and the 1st–5th of the
+     next month (a 30th that fell on a weekend), is the 30th's pay. entries: [{d, a, n}] for every month. */
+  function paySlots(entries, today, isSalary) {
+    const pay = entries.filter(x => x && x.d && isSalary(x.n || '') && +x.a > 0), mid = [], end = [];
+    for (let k = 1; k <= 6; k++) {
+      const m0 = new Date(today.getFullYear(), today.getMonth() - k, 1), y = m0.getFullYear(), i = m0.getMonth();
+      const ym = iso(m0).slice(0, 7), nx = iso(new Date(y, i + 1, 1)).slice(0, 7);
+      let a = 0, b = 0;
+      pay.forEach(x => { const xm = x.d.slice(0, 7), day = +x.d.slice(8, 10);
+        if (xm === ym && day >= 10 && day <= 22) a += +x.a;
+        else if ((xm === ym && day >= 23) || (xm === nx && day <= 5)) b += +x.a; });
+      if (a > 0) mid.push(a); if (b > 0) end.push(b);
+    }
+    const avg = l => l.reduce((s, x) => s + x, 0) / l.length;
+    return mid.length >= 2 && end.length >= 2 ? {mid: avg(mid), end: avg(end)} : null;
+  }
+  // paydays (15th, and the 30th or the month's last day) from today up to the start of a month 'YYYY-MM'
+  function paydaysUntil(ym, today) {
+    const [y, m] = ym.split('-').map(Number), stop = new Date(y, m - 1, 1), t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate()); let n = 0;
+    for (let d = new Date(t0.getFullYear(), t0.getMonth(), 1); d < stop; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
+      const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      [15, Math.min(30, last)].forEach(dd => { const x = new Date(d.getFullYear(), d.getMonth(), dd); if (x >= t0 && x < stop) n++; });
+    }
+    return n;
+  }
+  // monthly loan payment
+  const amort = (P, ratePct, years) => { const r = ratePct / 100 / 12, n = years * 12; return r > 0 ? P * r / (1 - (1 + r) ** -n) : P / n; };
+  // balance left after k payments
+  const loanLeft = (P, ratePct, years, k) => { const r = ratePct / 100 / 12, m = amort(P, ratePct, years); return r > 0 ? P * (1 + r) ** k - m * ((1 + r) ** k - 1) / r : P - m * k; };
+
+  /* ---- subscriptions: a shop charged in most months at about the same price ----
+     rows: [{n, a, y, i, d}], nameOf(n) → shop name, known(n) → a known subscription brand */
+  function detectSubs(rows, nameOf, known) {
+    const g = {}, med = a => { const b = a.slice().sort((x, y) => x - y), k = b.length >> 1; return b.length % 2 ? b[k] : (b[k - 1] + b[k]) / 2; };
+    rows.forEach(r => { const m = nameOf(r.n); if (m) (g[m] = g[m] || []).push(r); });
+    const out = [], dOf = r => r.d || `${r.y}-${String(r.i + 1).padStart(2, '0')}-15`;
+    for (const [name, list] of Object.entries(g)) {
+      const months = new Set(list.map(r => `${r.y}-${r.i}`)), kn = list.some(r => known(r.n));
+      if (months.size < (kn ? 2 : 3) || list.length > months.size * 2) continue;               // monthly, not several times a month
+      const byDate = list.slice().sort((a, b) => dOf(a).localeCompare(dOf(b))), amts = byDate.map(r => +r.a), m = med(amts);
+      if (med(amts.map(a => Math.abs(a - m))) / m > (kn ? 0.35 : 0.12)) continue;                // about the same price each time
+      const last = byDate[byDate.length - 1], prev = amts.slice(0, -1), before = prev.length ? med(prev) : m, up = +last.a - before;
+      const nd = new Date(dnum(dOf(last))); nd.setMonth(nd.getMonth() + 1);
+      out.push({name, monthly: +last.a, year: +last.a * 12, last: dOf(last), next: iso(nd), count: list.length, up: up >= Math.max(5, before * 0.03) ? up : 0, before, cat: last.cat, known: kn});
+    }
+    return out.sort((a, b) => b.monthly - a.monthly);
+  }
+
+  /* ---- bills get an id from their name and first due date, so two phones adding ids give the same one ---- */
+  function billId(name, due) { let h = 5381; const t = String(name || '').trim().toLowerCase() + '|' + (due || ''); for (let k = 0; k < t.length; k++) h = ((h << 5) + h + t.charCodeAt(k)) | 0; return 'b' + (h >>> 0).toString(36); }
+  function ensureBillIds(bills) {
+    let added = 0; const seen = new Set((bills || []).filter(b => b.id).map(b => b.id));
+    (bills || []).forEach(b => { if (b.id) return; let id = billId(b.name, b.due), k = 1; while (seen.has(id)) id = billId(b.name, b.due) + '_' + (++k); b.id = id; seen.add(id); added++; });
+    return added;
+  }
+
+  const api = {billId, ensureBillIds, DAYMS, iso, mkDate, dnum, addDays, daysBetween, billMonth, tdPayouts, carvePlan, paySlots, paydaysUntil, amort, loanLeft, detectSubs, J, pick, mergeById, merge3};
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PeraMoney = api;
 })(typeof window !== 'undefined' ? window : globalThis);
