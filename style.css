@@ -342,8 +342,8 @@ html.applock #mainView,html.applock .tabs,html.applock .sheet,html.applock .toas
 .ni{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--bg);font-size:13px}
 .nt{font-size:14px}.nt small{display:block;color:var(--mute);font-size:12px;margin-top:2px}.chev{color:var(--mute)}
 @media (min-width:900px){
-  .homegrid{grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);grid-template-areas:"hero month" "hero bills" "flow bills" "t13 bills" "notes bills";align-items:start;max-width:1180px}
-  .hcard.hero{grid-area:hero;background:var(--card);padding:20px}#hMonth{grid-area:month}#hBills{grid-area:bills}#hNotes{grid-area:notes}#hFlow{grid-area:flow}#h13{grid-area:t13}
+  .homegrid{grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);grid-template-areas:"hero month" "hero year" "hero bills" "flow bills" "t13 bills" "notes bills";align-items:start;max-width:1180px}
+  .hcard.hero{grid-area:hero;background:var(--card);padding:20px}#hMonth{grid-area:month}#hBills{grid-area:bills}#hNotes{grid-area:notes}#hFlow{grid-area:flow}#h13{grid-area:t13}#hYear{grid-area:year}
   .homegrid .fig{height:300px}
 }
 
@@ -583,3 +583,17 @@ main.app{display:block}header.top{display:flex}
 .pisohi .pisosvg{width:64px;height:64px;flex:none}.chat .pisoav .pisosvg{width:28px;height:28px}
 .capcats li{display:flex;justify-content:space-between;gap:10px;padding:8px 0}.capcats .t{display:flex;flex-direction:column}.capcats .t small{color:var(--mute);font-size:12px}
 .chat .airow{align-self:stretch}
+
+.hlgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px}.hlgrid label{margin-top:12px}
+.fundlist{display:grid;gap:10px;margin-bottom:8px}.fund{display:block;text-align:left;width:100%}.fundtop{display:flex;justify-content:space-between;gap:8px;margin-bottom:6px}
+.yearbtn{all:unset;box-sizing:border-box;display:flex;gap:12px;align-items:center;width:100%;cursor:pointer}.yearbtn:focus-visible{outline:2px solid var(--blue);outline-offset:4px;border-radius:12px}
+.yearbtn b{display:block;font-size:16px}.yearbtn .muted{display:block;font-size:13px}.yearbtn .pisosvg{flex:none}
+.yslides{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:4px 2px 12px;margin:0 -4px;-webkit-overflow-scrolling:touch}
+.yslide{flex:0 0 86%;scroll-snap-align:center;box-sizing:border-box;min-height:380px;padding:22px 20px;border-radius:22px;background:linear-gradient(160deg,color-mix(in srgb,#f2c14e 22%,var(--card)),var(--card) 60%);border:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.yslide:nth-child(2){background:linear-gradient(160deg,color-mix(in srgb,var(--s3,#2a9d8f) 26%,var(--card)),var(--card) 60%)}
+.yslide:nth-child(3){background:linear-gradient(160deg,color-mix(in srgb,var(--blue) 24%,var(--card)),var(--card) 60%)}
+.yslide:nth-child(4){background:linear-gradient(160deg,color-mix(in srgb,var(--red) 18%,var(--card)),var(--card) 60%)}
+.ylead{margin:8px 0 0;font-size:15px;color:var(--mute)}.ybig{margin:0;font-family:Literata,Georgia,serif;font-size:clamp(30px,9vw,40px);font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums}
+.yslide p{margin:4px 0}.ytop{margin:8px 0 0;padding-left:20px}.ytop li{margin:4px 0}.ytop li span{display:inline-block;min-width:60%}.ydots{text-align:center;font-size:12px}
+.yslide .go{margin-top:auto}
+.hlgrid{align-items:end}

@@ -294,7 +294,7 @@ function renderHome(ser) {
   const prev = ser[ser.indexOf(cur) - 1];
   if (prev) { const d = cur.total - prev.total; $('homeChg').innerHTML = `<span class="${d >= 0 ? 'up' : 'dn'}">${d >= 0 ? '▲' : '▼'} ${esc(peso(Math.abs(d)))}</span> vs ${esc(M[prev.i])}`; }
   else $('homeChg').textContent = '';
-  homeMonth(cur, prev); plan13Card(); homeFlow(); homeBills(); homeNotes(cur, ser); homeSummary();
+  homeMonth(cur, prev); yearCard(); plan13Card(); homeFlow(); homeBills(); homeNotes(cur, ser); homeSummary();
   $('homeList').innerHTML = '';
   const ml = $('homeMonthLink'); ml.hidden = false; ml.dataset.y = cur.y; ml.dataset.i = cur.i;
   ml.textContent = `See all of ${M[cur.i]}’s entries →`;
@@ -428,7 +428,7 @@ function capSheet() {
   const r = x => Math.round(x);
   openSheet(`<div class="sheethead"><h2>Spending cap</h2><button type="button" class="ghost" data-act="close">Done</button></div>
     <p class="muted">Everyday spending for a month, not counting bills or money moved to savings. Each pay period gets half.</p>
-    <div class="tiles"><div class="tile"><span>Suggested</span><b>${esc(pesoS(P.suggested))}</b></div><div class="tile"><span>${P.baseName === 'salary' ? 'Salary' : 'Income'}</span><b>${esc(pesoS(P.base))}</b></div><div class="tile"><span>Savings + bills</span><b>${esc(pesoS(P.target + P.billsAvg))}</b></div></div>
+    <div class="trio"><div class="tile"><span>Suggested</span><b>${esc(pesoS(P.suggested))}</b></div><div class="tile"><span>${P.baseName === 'salary' ? 'Salary' : 'Income'}</span><b>${esc(pesoS(P.base))}</b></div><div class="tile"><span>Savings + bills</span><b>${esc(pesoS(P.target + P.billsAvg))}</b></div></div>
     <p class="muted">Suggested = ${P.baseName} ${esc(peso(r(P.base)))} − savings ${esc(peso(r(P.target)))} − bills ${esc(peso(r(P.billsAvg)))} (average of the next 3 months).</p>
     <label for="capIn">Your own cap (optional)</label><input id="capIn" inputmode="decimal" placeholder="${esc(String(r(P.suggested)))}" value="${P.own ? r(P.own) : ''}">
     <button class="go" data-act="cap-save">Save</button>${P.own ? '<button class="ghost" data-act="cap-clear" style="width:100%;margin-top:8px">Use the suggestion instead</button>' : ''}
@@ -919,6 +919,7 @@ function renderSavings() {
   w.innerHTML = `<div class="savtotal"><div class="muted">In savings now</div><div class="big" style="font-size:clamp(34px,10vw,44px)" data-count="sav" data-n="${total}" data-d="2">${esc(peso(total, 2))}</div>
       <p class="muted">Deposits here count as that month’s <b>Saved</b>, not spent: Pera takes them out of the month’s transfers (₱29k sent, ₱10k into savings → ₱19k spent). Total money doesn’t change — the transfer already left your bank.</p></div>
     ${goalsHTML()}
+    ${fundsHTML()}
     ${pots().length || goals().length ? aiCardHTML('savings', 'card') : ''}
     <h2 class="sech">Accounts</h2>
     <div class="potgrid">${ps.map(card).join('') || '<p class="empty">No savings yet. Add your Maya time deposit, MP2 or a savings account, or import the Maya file from your spreadsheet in Settings.</p>'}</div>
@@ -1038,9 +1039,9 @@ function bindGoalForm(g) {
     if (isNew) toast(`${name} added`, () => { S.meta.goals = before; commit('meta'); closeSheet(); });
   });
 }
-function goalNew(target) {
+function goalNew(target, name) {
   openSheet(`<div data-goal="new"><div class="sheethead"><h2>New goal</h2><button class="ghost" data-act="close">Cancel</button></div>
-    <p class="muted">Tell Pera how much and either when or how much a month. It does the rest.</p>${goalForm({from: pots().length ? 'all' : 'none', target})}</div>`);
+    <p class="muted">Tell Pera how much and either when or how much a month. It does the rest.</p>${goalForm({from: pots().length ? 'all' : 'none', target, name})}</div>`);
   bindGoalForm({}); setTimeout(() => $('gN').focus(), 50);
 }
 /* ---- pot sheet ---- */
@@ -1694,6 +1695,7 @@ function planningLines(ser) {
     P.own ? `- Their own monthly spending cap (set by them, use it): ${r(cap)}; Pera's suggestion would be ${r(P.suggested)} (${baseName} ${r(base)} − savings ${r(target)} − bills ${r(billsAvg)}). About ${r(cap / 2)} per pay period.`
       : `- Suggested monthly spending cap, not counting scheduled bills: ${r(cap)} (${baseName} ${r(base)} − savings ${r(target)} − bills ${r(billsAvg)}); about ${r(cap / 2)} per pay period, ${r(cap / 30)}/day.`,
     ...leftLines(),
+    ...(funds().length ? [`- Set aside for known costs: ${funds().map(f => { const c = fundPer(f); return `${f.name} ${Math.round(f.target)} by ${f.due} (has ${Math.round(+f.have || 0)}, ${Math.ceil(c.per)} per payday)`; }).join('; ')}.`] : []),
     ...(S.meta.plan13 ? [`- Their 13th month plan (${S.meta.plan13.yr}): ${Math.round(S.meta.plan13.amount)} → tight paydays ${Math.round(S.meta.plan13.tight)}, safety net ${Math.round(S.meta.plan13.safety)}, for themselves ${Math.round(S.meta.plan13.treat)}${goals().filter(g => (S.meta.plan13.goals || {})[g.id]).map(g => `, ${g.name} ${Math.round(S.meta.plan13.goals[g.id])}`).join('')}${S.meta.plan13.extra ? `, extra savings ${Math.round(S.meta.plan13.extra)}` : ''}.`] : []),
     `- 50/30/20 of ${baseName}: needs ${r(base * .5)}, wants ${r(base * .3)}, savings ${r(base * .2)}.`,
     `- Emergency fund: ${r(liquid)} in withdrawable savings (plus ${r(locked)} locked in MP2) covers ${ess > 0 ? (liquid / ess).toFixed(1) : '?'} months of their usual spending (${r(ess)}/month).`,
@@ -2191,7 +2193,141 @@ async function shareTo(t, id) {
   sharedFiles = null;
   await readShots(files, e => { msg(e); $('sheetBody') && $('sheetBody').querySelectorAll('.sharech').forEach(b => b.disabled = false); if (e) sharedFiles = files; }, msg);
 }
-const REPORTS = [['flow', 'Income vs spending', '⇅'], ['trend', 'Spending trend', '≡'], ['cal', 'Spending calendar', '#'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '↓']];
+/* ---- net worth: cash + savings − what you still owe ---- */
+function worthData() {
+  const ser = series().filter(p => p.past || p.now), last = ser[ser.length - 1]; if (!last) return null;
+  const end = p => p.now ? todayIso() : iso(new Date(+p.y, p.i + 1, 0));
+  const hist = ser.slice(-12).map(p => { const sv = pots().reduce((s, x) => s + potValueAt(x, end(p)), 0); return {y: p.y, i: p.i, cash: p.total, sav: sv, have: p.total + sv, now: p.now}; });
+  const owed = (S.meta.bills || []).filter(b => !b.paid && b.due).reduce((s, b) => s + +b.a, 0), now = hist[hist.length - 1];
+  const byPot = pots().map(p => ({name: p.name, v: potNow(p)})), year = hist.find(h => h.i === 0 && +h.y === today().getFullYear());
+  return {hist, owed, cash: now.cash, sav: byPot.reduce((s, x) => s + x.v, 0), byPot, worth: now.cash + byPot.reduce((s, x) => s + x.v, 0) - owed, yearStart: year};
+}
+function worthSVG(svg, hist) {
+  const W = svg.clientWidth || 340, H = svg.clientHeight || 170, pl = 44, pr = 10, pt = 10, pb = 26, n = hist.length; if (n < 2) return;
+  const hi = niceUp(Math.max(1, ...hist.map(h => h.have))), X = k => pl + k * (W - pl - pr) / (n - 1), Y = v => pt + (1 - Math.max(0, v) / hi) * (H - pt - pb);
+  const area = (k, col, op) => `<path d="M${X(0)} ${Y(0)}${hist.map((h, j) => `L${X(j).toFixed(1)} ${Y(h[k]).toFixed(1)}`).join('')}L${X(n - 1)} ${Y(0)}Z" fill="${col}" opacity="${op}"/>`;
+  const line = (k, col) => `<path d="${hist.map((h, j) => `${j ? 'L' : 'M'}${X(j).toFixed(1)} ${Y(h[k]).toFixed(1)}`).join('')}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>`;
+  const step = Math.ceil(n / 6);
+  svg.innerHTML = gridY(W, H, pl, pr, pt, pb, hi, pesoS) + area('have', 'var(--s3,#2a9d8f)', .22) + area('cash', 'var(--blue)', .28) + line('have', 'var(--s3,#2a9d8f)') + line('cash', 'var(--blue)')
+    + hist.map((h, j) => (j % step === 0 || j === n - 1) && !(j !== n - 1 && n - 1 - j < step) ? `<text x="${X(j)}" y="${H - 9}" text-anchor="middle" font-size="11" fill="var(--mute)">${M[h.i].slice(0, 3)}</text>` : '').join('')
+    + hist.map((h, j) => { const x0 = j ? (X(j - 1) + X(j)) / 2 : pl - 4, x1 = j < n - 1 ? (X(j) + X(j + 1)) / 2 : W - pr + 4;
+      return `<g class="hit" data-tip="${esc(`<b>${M[h.i]} ${h.y}${h.now ? ' (now)' : ''}</b><div><i style="background:var(--blue)"></i>Cash <span>${esc(peso(h.cash))}</span></div><div><i style="background:var(--s3,#2a9d8f)"></i>Savings <span>${esc(peso(h.sav))}</span></div><div class="tt">Total <span>${esc(peso(h.have))}</span></div>`)}"><rect x="${x0}" y="${pt}" width="${x1 - x0}" height="${H - pt - pb}" fill="transparent"/><line class="xh" x1="${X(j)}" x2="${X(j)}" y1="${pt}" y2="${H - pb}" stroke="var(--mute)"/></g>`; }).join('');
+}
+
+/* ---- home loan planner (Pag-IBIG) ---- */
+const HOME_RATES = [[4.5, '4.5% · Pag-IBIG promo, loans up to ₱2.5M, fixed 3 yrs (apply by Dec 31, 2026)'], [5.75, '5.75% · promo for ₱2.5M–₱10M, fixed 3 yrs (apply by Dec 31, 2026)'], [6.25, '6.25% · regular, reprices every 3 years'], [9.75, '9.75% · regular, fixed for 30 years']];
+const amort = (P, ratePct, years) => { const r = ratePct / 100 / 12, n = years * 12; return r > 0 ? P * r / (1 - (1 + r) ** -n) : P / n; };
+function homeSheetHTML() {
+  const h = {price: 3000000, down: 20, rate: 4.5, years: 30, ...(S.meta.homePlan || {})};
+  return `<div class="sheethead"><h2>Home loan planner</h2><button type="button" class="ghost" data-act="close">Done</button></div>
+    <p class="muted">A rough plan for a Pag-IBIG housing loan. Rates as of Nov 2026; check the current ones before applying.</p>
+    <div class="hlgrid"><div><label for="hlPrice">House price</label><input id="hlPrice" inputmode="decimal" value="${h.price}"></div>
+      <div><label for="hlDown">Down payment (%)</label><input id="hlDown" inputmode="decimal" value="${h.down}"></div>
+      <div><label for="hlYears">Years to pay</label><input id="hlYears" inputmode="numeric" value="${h.years}"></div></div>
+    <label for="hlRate">Interest rate</label><select id="hlRate">${HOME_RATES.map(([v, l]) => `<option value="${v}" ${+h.rate === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}${HOME_RATES.some(([v]) => v === +h.rate) ? '' : `<option value="${h.rate}" selected>${h.rate}%</option>`}</select>
+    <div id="hlOut" aria-live="polite"></div>`;
+}
+function homeCalc() {
+  const n = id => +((($(id) || {}).value || '').replace(/[^\d.]/g, '')) || 0;
+  const price = n('hlPrice'), down = Math.min(100, n('hlDown')), years = Math.min(30, Math.max(1, n('hlYears') || 30)), rate = +$('hlRate').value;
+  const dp = price * down / 100, loan = price - dp, m = amort(loan, rate, years), P = planNumbers();
+  S.meta.homePlan = {price, down, rate, years};
+  const after = rate < 6.25 ? amort(loan * Math.pow(1 + rate / 1200, 36) - amort(loan, rate, years) * ((Math.pow(1 + rate / 1200, 36) - 1) / (rate / 1200)), 6.25, years - 3) : null;
+  const gross = m / 0.35, pctTake = P && P.base ? m / P.base * 100 : null;
+  const n2 = P && P.saved > 0 ? gMonths(0, dp, P.saved, 0.048 / 12) : null;
+  $('hlOut').innerHTML = `<div class="trio" style="margin-top:14px"><div class="tile"><span>Down payment</span><b>${esc(pesoS(dp))}</b></div><div class="tile"><span>Loan</span><b>${esc(pesoS(loan))}</b></div><div class="tile"><span>Monthly</span><b>${esc(pesoS(m))}</b></div></div>
+    ${loan > 10e6 ? '<p class="stalenote">Pag-IBIG lends up to ₱10M; the rest would need a bigger down payment or a bank loan.</p>' : ''}
+    ${rate === 4.5 && loan > 2.5e6 && loan <= 10e6 ? '<p class="stalenote">The 4.5% promo is for loans up to ₱2.5M. A loan this size gets the 5.75% promo instead; pick it above, or raise the down payment.</p>' : ''}
+    <ul class="p13fx">
+      <li>Monthly payment <b>${esc(peso(Math.round(m)))}</b> for ${years} years${after ? `; after the 3-year fixed rate it could become about <b>${esc(peso(Math.round(after)))}</b> if repriced at 6.25%` : ''}.</li>
+      <li>Lenders usually want the payment to be at most about a third of gross monthly income: about <b>${esc(peso(Math.round(gross)))}</b> gross here.</li>
+      ${pctTake != null ? `<li>That’s <b>${Math.round(pctTake)}%</b> of your ${P.baseName} (${esc(peso(Math.round(P.base)))}). ${pctTake <= 30 ? 'Comfortable.' : pctTake <= 40 ? 'Doable but tight; your spending cap would shrink.' : 'Too heavy for now: a cheaper house, a longer term or a bigger down payment would help.'}</li>` : ''}
+      ${n2 != null ? `<li>Saving your usual ${esc(peso(Math.round(P.saved)))} a month, the down payment takes about <b>${isFinite(n2) ? `${n2} months (${esc(inMonths(n2))})` : 'too long'}</b>, not counting what you already have.</li>` : ''}
+      <li>Also budget for fees, taxes and moving in: often 5–7% of the price (about ${esc(peso(Math.round(price * 0.06)))}).</li></ul>
+    <button class="go" data-act="hl-goal" data-a="${Math.round(dp)}">Make the down payment a goal</button>`;
+}
+function homeSheet() {
+  openSheet(homeSheetHTML(), () => { ['hlPrice', 'hlDown', 'hlYears', 'hlRate'].forEach(id => $(id).addEventListener('input', homeCalc)); $('hlRate').addEventListener('change', homeCalc); homeCalc(); });
+}
+
+/* ---- set aside for known costs (sinking funds): Christmas, insurance, gadgets ---- */
+const funds = () => S.meta.funds || [];
+function paydaysUntil(ym) {   // paydays from today up to the end of the month before it's due
+  const t = today(), [y, m] = ym.split('-').map(Number), stop = new Date(y, m - 1, 1); let n = 0;
+  for (let d = new Date(t.getFullYear(), t.getMonth(), 1); d < stop; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
+    const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    [15, Math.min(30, last)].forEach(dd => { const x = new Date(d.getFullYear(), d.getMonth(), dd); if (x >= new Date(t.getFullYear(), t.getMonth(), t.getDate()) && x < stop) n++; });
+  }
+  return n;
+}
+const fundPer = f => { const left = Math.max(0, +f.target - (+f.have || 0)), n = paydaysUntil(f.due); return {left, n, per: n ? left / n : left}; };
+function fundsHTML() {
+  const fs = funds(), total = fs.reduce((s, f) => s + fundPer(f).per, 0), ym = d => new Date(+d.slice(0, 4), +d.slice(5) - 1).toLocaleDateString('en-PH', {month: 'short', year: 'numeric'});
+  return `<div class="inshead"><h2 class="sech">Set aside for</h2><button class="ghost" data-act="fund-new">＋ Add</button></div>
+    ${fs.length ? `<p class="muted">Known costs coming up. Put away <b>${esc(peso(Math.ceil(total)))}</b> each payday to have them ready.</p>
+    <div class="fundlist">${fs.map(f => { const c = fundPer(f), pr = +f.target ? Math.min(1, (+f.have || 0) / +f.target) : 0;
+      return `<button class="card fund" data-act="fund-open" data-id="${esc(f.id)}"><div class="fundtop"><b>${esc(f.name)}</b><span class="muted">${esc(ym(f.due))}</span></div>
+        <div class="bar"><i style="width:${(pr * 100).toFixed(1)}%"></i></div>
+        <div class="muted">${esc(peso(+f.have || 0))} of ${esc(peso(+f.target))} · ${c.left <= 0 ? '<span class="up">ready ✓</span>' : c.n ? `<b>${esc(peso(Math.ceil(c.per)))}</b> per payday for ${c.n} payday${c.n === 1 ? '' : 's'}` : '<span class="dn">due now</span>'}</div></button>`; }).join('')}</div>`
+    : `<button class="card goalempty" data-act="fund-new"><b>Plan for known costs</b><span class="muted">Christmas gifts, insurance, a new phone, car registration: Pera splits them into small amounts each payday so they don’t hit one paycheck.</span></button>`}`;
+}
+function fundSheet(id) {
+  const f = funds().find(x => x.id === id) || {name: '', target: '', have: 0, due: iso(new Date(today().getFullYear(), today().getMonth() + 3, 1)).slice(0, 7)};
+  const presets = ['Christmas gifts', 'Insurance', 'New phone', 'Car registration', 'Birthdays', 'Travel'];
+  openSheet(`<div class="sheethead"><h2>${id ? esc(f.name) : 'Set aside for…'}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    ${id ? '' : `<div class="chips">${presets.map(n => `<button class="chip" data-act="fund-preset" data-n="${esc(n)}">${esc(n)}</button>`).join('')}</div>`}
+    <label for="fnName">What for</label><input id="fnName" maxlength="40" value="${esc(f.name)}">
+    <div class="hlgrid"><div><label for="fnTarget">Amount needed</label><input id="fnTarget" inputmode="decimal" value="${f.target}"></div>
+      <div><label for="fnDue">Needed by</label><input id="fnDue" type="month" value="${esc(f.due)}"></div>
+      <div><label for="fnHave">Set aside so far</label><input id="fnHave" inputmode="decimal" value="${+f.have || 0}"></div></div>
+    <button class="go" data-act="fund-save" data-id="${esc(id || '')}">Save</button>
+    ${id ? `<button class="ghost" data-act="fund-add" data-id="${esc(id)}" style="width:100%;margin-top:8px">Add this payday’s amount (${esc(peso(Math.ceil(fundPer(f).per)))})</button><button class="ghost dn" data-act="fund-del" data-id="${esc(id)}" style="width:100%;margin-top:8px">Delete</button>` : ''}`);
+}
+
+/* ---- your year in review ---- */
+const reviewYear = () => today().getMonth() === 0 ? today().getFullYear() - 1 : today().getFullYear();
+function yearData(yr) {
+  const Y = String(yr), ser = series().filter(p => p.y === Y && (p.past || p.now) && (p.inc || p.exp)); if (!ser.length) return null;
+  const sum = k => ser.reduce((s, p) => s + p[k], 0), inc = sum('inc'), spent = sum('spent'), saved = sum('sav');
+  const rows = spendingIn(ser.map(p => ({y: p.y, i: p.i}))).filter(r => r.a > 0 && !['Transfers', 'No description', 'Other'].includes(r.cat));
+  const shops = {}; rows.filter(r => r.cat !== 'Bills & PayLater').forEach(r => { const m = merchantOf(r.n) || r.n; shops[m] = (shops[m] || 0) + r.a; });
+  const cats = {}; rows.filter(r => r.cat !== 'Bills & PayLater').forEach(r => { cats[r.cat] = (cats[r.cat] || 0) + r.a; });
+  const top = Object.entries(shops).sort((a, b) => b[1] - a[1]).slice(0, 5), topCat = Object.entries(cats).sort((a, b) => b[1] - a[1])[0];
+  const byMonth = ser.filter(p => !p.now).map(p => ({i: p.i, spent: p.spent, sav: p.sav}));
+  const big = byMonth.slice().sort((a, b) => b.spent - a.spent)[0], low = byMonth.slice().sort((a, b) => a.spent - b.spent)[0], bestSave = byMonth.slice().sort((a, b) => b.sav - a.sav)[0];
+  const bills = (S.meta.bills || []).filter(b => b.paid && b.due && b.due.startsWith(Y)), billsAmt = bills.reduce((s, b) => s + +b.a, 0);
+  const endD = +Y === today().getFullYear() ? todayIso() : `${Y}-12-31`;
+  const savStart = pots().reduce((s, p) => s + potValueAt(p, `${+Y - 1}-12-31`), 0), savEnd = pots().reduce((s, p) => s + potValueAt(p, endD), 0);
+  let interest = 0;
+  pots().forEach(p => { if (p.kind === 'td' && tdMonthlyOn(p)) (p.cycles || []).forEach(c => { const cc = tdCycle(p, c); (cc.pays || []).filter(x => x.paid && x.date.startsWith(Y)).forEach(x => { interest += x.a; }); });
+    if (p.kind === 'mp2') { const m = mp2Calc(p), row = (m.years || []).find(x => +x.y === +Y); if (row && row.real) interest += row.div; } });
+  return {yr: Y, months: ser.length, inc, spent, saved, rate: inc ? saved / inc : 0, top, topCat, big, low, bestSave, bills: bills.length, billsAmt, savStart, savEnd, interest};
+}
+function yearSheet() {
+  const d = yearData(reviewYear()); if (!d) return toast('Not enough data for a year in review yet.');
+  const P = n => esc(peso(Math.round(n))), mn = i => M[i];
+  const slide = (mood, html) => `<section class="yslide">${pisoOn() ? `<div class="ypiso">${pisoSVG(mood, 72)}</div>` : ''}${html}</section>`;
+  const slides = [
+    slide('cheer', `<p class="ylead">Your ${d.yr}</p><p class="ybig">${P(d.saved)}</p><p>saved in ${d.months} month${d.months === 1 ? '' : 's'}: <b>${Math.round(d.rate * 100)}%</b> of the ${P(d.inc)} that came in.</p>`),
+    slide('happy', `<p class="ylead">Your savings grew</p><p class="ybig">${P(d.savStart)} → ${P(d.savEnd)}</p><p>${d.interest > 0 ? `Including <b>${P(d.interest)}</b> in interest and dividends paid to you.` : 'Every deposit counted.'}</p>`),
+    slide('calm', `<p class="ylead">Where the money went</p><p class="ybig">${P(d.spent)}</p><p>spent${d.topCat ? `; your biggest everyday category was <b>${esc(d.topCat[0])}</b> (${P(d.topCat[1])})` : ''}.</p>${d.top.length ? `<ol class="ytop">${d.top.map(([n, v]) => `<li><span>${esc(n)}</span><b>${P(v)}</b></li>`).join('')}</ol>` : ''}`),
+    slide(d.big ? 'wince' : 'calm', `<p class="ylead">Months to remember</p>${d.big ? `<p>Biggest spending: <b>${mn(d.big.i)}</b> (${P(d.big.spent)})</p>` : ''}${d.low ? `<p>Lightest: <b>${mn(d.low.i)}</b> (${P(d.low.spent)})</p>` : ''}${d.bestSave ? `<p>Best saving month: <b>${mn(d.bestSave.i)}</b> (${P(d.bestSave.sav)})</p>` : ''}`),
+    slide('cheer', `${d.bills ? `<p class="ylead">Bills handled</p><p class="ybig">${d.bills}</p><p>PayLater and bill payments done${d.billsAmt ? `, ${P(d.billsAmt)} in all` : ''}.</p>` : `<p class="ylead">That’s your year</p>`}<p>${d.rate >= 0.2 ? 'You saved more than the 20% rule. Galing!' : 'Next year: aim to save 20% of what comes in.'}</p><button class="go" data-act="yr-share">Share my year</button>`)];
+  openSheet(`<div class="sheethead"><h2>${d.yr} in review</h2><button type="button" class="ghost" data-act="close">Done</button></div>
+    <div class="yslides" tabindex="0" aria-label="Your year, ${slides.length} cards. Swipe or scroll sideways.">${slides.join('')}</div>
+    <p class="muted ydots">Swipe for more →</p>`);
+  yearShare = `My ${d.yr} with Pera: saved ${peso(Math.round(d.saved))} (${Math.round(d.rate * 100)}% of income), savings grew to ${peso(Math.round(d.savEnd))}${d.interest > 0 ? `, ${peso(Math.round(d.interest))} in interest` : ''}, ${d.bills ? `${d.bills} bills paid. ` : ''}🪙`;
+}
+let yearShare = '';
+function yearCard() {
+  const box = $('hYear'); if (!box) return;
+  const m = today().getMonth(), show = m === 11 || m === 0, d = show ? yearData(reviewYear()) : null;
+  if (!d) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `<button class="yearbtn" data-act="report" data-r="year">${pisoOn() ? pisoSVG('cheer', 44) : ''}<span><b>Your ${d.yr} in review</b><span class="muted">${esc(peso(Math.round(d.saved)))} saved · ${Math.round(d.rate * 100)}% of income. Tap to see your year.</span></span></button>`;
+}
+
+const REPORTS = [['flow', 'Income vs spending', '⇅'], ['worth', 'Net worth', '▤'], ['year', 'Year in review', '★'], ['home', 'Home loan planner', '⌂'], ['trend', 'Spending trend', '≡'], ['cal', 'Spending calendar', '#'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '↓']];
 let repState = {months: 6, cal: null};
 const lastMonths = n => { const t = today(), out = []; for (let k = n - 1; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); if (S.years[d.getFullYear()]) out.push({y: String(d.getFullYear()), i: d.getMonth()}); } return out; };
 const niceUp = v => { if (v <= 0) return 1; const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e; };
@@ -2200,6 +2336,17 @@ function legendHTML(items) { return `<div class="legend2">${items.map(([l, c]) =
 function reportSheet(r) {
   const head = t => `<div class="sheethead"><h2>${t}</h2><button type="button" class="ghost" data-act="close">Done</button></div>`;
   let html = '', draw = null;
+  if (r === 'year') return yearSheet();
+  if (r === 'home') return homeSheet();
+  if (r === 'worth') {
+    const w = worthData(); if (!w) return toast('Add some entries first.');
+    const ch = w.yearStart ? w.hist[w.hist.length - 1].have - w.yearStart.have : null;   // cash + savings vs January (past debts aren't known)
+    html = head('Net worth') + `<p class="ybig" style="margin:4px 0">${esc(peso(Math.round(w.worth)))}</p><p class="muted">What you have (cash ${esc(peso(Math.round(w.cash)))} + savings ${esc(peso(Math.round(w.sav)))}) minus what you still owe (${esc(peso(Math.round(w.owed)))} in unpaid bills & PayLater).${ch != null ? ` Cash + savings are ${ch >= 0 ? 'up' : 'down'} ${esc(peso(Math.abs(Math.round(ch))))} since January.` : ''}</p>
+      ${legendHTML([['Cash', 'var(--blue)'], ['Cash + savings', 'var(--s3,#2a9d8f)']])}<div class="rfig"><svg id="repSvg" role="img" aria-label="Cash and savings by month"></svg><div class="tip" id="repTip" hidden></div></div>
+      <ul class="list capcats">${w.byPot.map(x => `<li><span class="t">${esc(x.name)}</span><b class="amt">${esc(peso(x.v, 2))}</b></li>`).join('')}<li><span class="t">Cash (bank & wallets)</span><b class="amt">${esc(peso(w.cash, 2))}</b></li><li><span class="t">Unpaid bills & PayLater</span><b class="amt dn">−${esc(peso(w.owed, 2))}</b></li></ul>
+      <p class="muted">The chart shows what you had at each month’s end; past debts aren’t tracked, so only today’s are taken off.</p>`;
+    draw = svg => worthSVG(svg, w.hist);
+  }
   if (r === 'flow') {
     const d = flowData(repState.months);
     html = head('Income vs spending') + `<div class="seg repseg">${[6, 12].map(n => `<button data-act="rep-flow" data-n="${n}" aria-pressed="${repState.months === n}">${n} months</button>`).join('')}</div>
@@ -3616,6 +3763,20 @@ document.addEventListener('click', e => {
     case 'ask': return askSheet();
     case 'ask-q': return askPera(d.q);
     case 'cap-set': return capSheet();
+    case 'hl-goal': closeSheet(); return goalNew(+d.a, 'House down payment');
+    case 'yr-share': { const t = yearShare; if (navigator.share) navigator.share({text: t}).catch(() => {}); else navigator.clipboard.writeText(t).then(() => toast('Copied, paste it anywhere')).catch(() => toast(t)); return; }
+    case 'fund-new': return fundSheet();
+    case 'fund-open': return fundSheet(d.id);
+    case 'fund-preset': $('fnName').value = d.n; return $('fnTarget').focus();
+    case 'fund-save': {
+      const name = $('fnName').value.trim(), target = +($('fnTarget').value || '').replace(/[^\d.]/g, ''), due = $('fnDue').value, have = +($('fnHave').value || '').replace(/[^\d.]/g, '') || 0;
+      if (!name || !(target > 0) || !/^\d{4}-\d{2}$/.test(due)) return toast('Add what it’s for, the amount and the month you need it.');
+      const list = funds().slice(), f = list.find(x => x.id === d.id);
+      if (f) Object.assign(f, {name, target, due, have}); else list.push({id: uid(), name, target, due, have});
+      S.meta.funds = list; commit('meta'); closeSheet(); return toast(f ? 'Saved' : `${name} added`);
+    }
+    case 'fund-add': { const f = funds().find(x => x.id === d.id); if (!f) return; const add = Math.ceil(fundPer(f).per), was = +f.have || 0; f.have = was + add; commit('meta'); closeSheet(); return toast(`${peso(add)} set aside for ${f.name}`, () => { f.have = was; commit('meta'); }); }
+    case 'fund-del': { const list = funds(), k = list.findIndex(x => x.id === d.id); if (k < 0) return; const [f] = list.splice(k, 1); S.meta.funds = list; commit('meta'); closeSheet(); return toast(`${f.name} deleted`, () => { list.splice(k, 0, f); S.meta.funds = list; commit('meta'); }); }
     case 'piso': { const tips = pisoTips(); pisoReact = null; return pisoSay(tips[pisoTip++ % tips.length]); }
     case 'share-to': return shareTo(d.t, d.id);
     case 'share-cancel': sharedFiles = null; return closeSheet();
