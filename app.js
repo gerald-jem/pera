@@ -311,7 +311,7 @@ function renderHome(ser) {
   const prev = ser[ser.indexOf(cur) - 1];
   if (prev) { const d = cur.total - prev.total; $('homeChg').innerHTML = `<span class="${d >= 0 ? 'up' : 'dn'}">${d >= 0 ? '▲' : '▼'} ${esc(peso(Math.abs(d)))}</span> vs ${esc(M[prev.i])}`; }
   else $('homeChg').textContent = '';
-  homeMonth(cur, prev); homeBills(); homeNotes(cur, ser); homeSummary();
+  homeMonth(cur, prev); homeFlow(); homeBills(); homeNotes(cur, ser); homeSummary();
   $('homeList').innerHTML = '';
   const ml = $('homeMonthLink'); ml.hidden = false; ml.dataset.y = cur.y; ml.dataset.i = cur.i;
   ml.textContent = `See all of ${M[cur.i]}’s entries →`;
@@ -1317,7 +1317,7 @@ function renderInsights(ser) {
   const rate = (inc, exp) => inc > 0 ? Math.round((inc - exp) / inc * 100) : null;
 
   box.innerHTML = `<div class="inshead"><h2>Insights</h2><div class="seg insseg">${[['month', 'This month'], ['3m', '3 months'], ['year', 'This year'], ['lastyear', 'Last year']].map(([k, l]) => `<button data-act="ins-p" data-k="${k}" aria-pressed="${k === insP}">${l}</button>`).join('')}</div></div>
-  <button class="aibar" data-act="sort-spend"><span class="sparkic">${SPARK}</span><span>Sort my spending<small>AI suggests categories for bank text Pera couldn’t place</small></span><span class="chev">›</span></button>
+  <button class="aibar" data-act="sort-spend"><span class="sparkic">${SPARK}</span><span>Sort my spending<small>AI sorts bank text and catches entries in the wrong category</small></span><span class="chev">›</span></button>
   <div class="reports">${REPORTS.map(([k, l, ic]) => `<button class="repbtn" data-act="report" data-r="${k}"><span class="repic" aria-hidden="true">${ic}</span>${l}</button>`).join('')}</div>
   <div class="insgrid">
     <section class="card inscard"><div class="inshead"><h3>Where your money goes</h3><button class="chip trchip" data-act="ins-tr" aria-pressed="${insTr}">${insTr ? '✓ ' : ''}Include transfers</button></div>
@@ -1574,30 +1574,43 @@ async function askPera(q, again, fresh) {
 /* ---- Sort my spending: the AI suggests categories for bank text it can't place; you approve ---- */
 let sortSug = null;
 async function sortSpending() {
+  // every distinct note with its current category: unplaced ones to sort, placed ones to double-check
   const by = {};
-  for (const y of Object.keys(S.years)) S.years[y].forEach(m => m.exp.forEach(x => { if (!x.n || x.c) return; const c = catOf(x.n); if (c === 'Other') { const k = x.n.trim(); by[k] = (by[k] || 0) + 1; } }));
-  const notes = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 120).map(x => x[0]);
+  for (const y of Object.keys(S.years)) S.years[y].forEach(m => m.exp.forEach(x => {
+    if (!x.n || +x.a < 0) return; const k = x.n.trim(), c = x.c || catOf(x.n); if (c === 'No description') return;
+    const e = by[k] = by[k] || {note: k, n: 0, sum: 0, cats: {}}; e.n++; e.sum += +x.a; e.cats[c] = (e.cats[c] || 0) + 1;
+  }));
+  const all = Object.values(by).map(e => ({...e, cur: Object.entries(e.cats).sort((a, b) => b[1] - a[1])[0][0]}));
+  const unplaced = all.filter(e => e.cur === 'Other').sort((a, b) => b.n - a.n).slice(0, 120);
+  const placed = all.filter(e => e.cur !== 'Other').sort((a, b) => b.sum - a.sum).slice(0, 200);   // the ones that move the most money
+  const items = [...unplaced, ...placed];
   const nod = spendingIn(lastMonths(12)).filter(r => r.cat === 'No description').length;
-  openSheet(`<div class="sheethead"><h2>Sort my spending</h2><button type="button" class="ghost" data-act="close">Cancel</button></div><div id="sortBody"><p class="muted">${notes.length ? `Asking the AI about ${notes.length} note${notes.length === 1 ? '' : 's'} Pera couldn’t place…` : 'Everything with a note already has a category.'}</p>${notes.length ? '<div class="msg ai thinking"><i></i><i></i><i></i></div>' : ''}${nod ? `<p class="muted">${nod} entries have no note at all, so there’s nothing to sort them by. Adding a short note to big ones helps.</p>` : ''}</div>`);
-  if (!notes.length) return;
+  openSheet(`<div class="sheethead"><h2>Sort my spending</h2><button type="button" class="ghost" data-act="close">Cancel</button></div><div id="sortBody"><p class="muted">${items.length ? `Checking ${items.length} note${items.length === 1 ? '' : 's'}: placing ${unplaced.length} Pera couldn’t sort and double-checking ${placed.length} already sorted…` : 'There’s nothing with a note to sort yet.'}</p>${items.length ? '<div class="msg ai thinking"><i></i><i></i><i></i></div>' : ''}${nod ? `<p class="muted">${nod} entries have no note at all, so there’s nothing to sort them by. Adding a short note to big ones helps.</p>` : ''}</div>`);
+  if (!items.length) return;
   const cats = CAT_NAMES.filter(c => c !== 'No description');
   try {
-    const res = await aiQueue('Sort my spending', () => aiJSON('sort', {system: AI_RULES, maxTokens: 4000, think: 'low',
-      messages: [{role: 'user', text: `Put each Philippine bank/e-wallet transaction note into one category: ${cats.join(', ')}. Use "Transfers" for moving money to the person's own accounts or other people (InstaPay/PESONet sends, "Sent to", "Transfer to"). Use "Other" only when nothing fits. Also give a short clean shop/payee name.\nNotes:\n${notes.map((n, k) => `${k + 1}. ${n}`).join('\n')}`}],
+    const res = await aiQueue('Sort my spending', () => aiJSON('sort', {system: AI_RULES, maxTokens: 6000, think: 'low',
+      messages: [{role: 'user', text: `These are Philippine bank/e-wallet transaction notes, each with the category it has now ("Other" means not sorted). Categories: ${cats.join(', ')}. "Transfers" is for moving money to the person's own accounts or sending it to other people (InstaPay/PESONet sends, "Sent to", "Transfer to", savings, Pag-IBIG MP2); "Bills & PayLater" is for card, loan, PayLater, utility and subscription payments.\nReturn ONLY the notes whose category should change: every "Other" note you can place, and any sorted note that is clearly in the wrong category (be sure; leave borderline ones alone). Also give a short clean shop/payee name.\nNotes (number. note — current category):\n${items.map((e, k) => `${k + 1}. ${e.note} — ${e.cur}`).join('\n')}`}],
       schema: {type: 'ARRAY', items: {type: 'OBJECT', properties: {n: {type: 'INTEGER'}, category: {type: 'STRING', enum: cats}, name: {type: 'STRING'}}, required: ['n', 'category']}}}),
       st => { const p = $('sortBody') && $('sortBody').querySelector('p.muted'); if (p && aiqText(st)) p.textContent = aiqText(st); });
-    sortSug = (Array.isArray(res) ? res : []).map(r => ({note: notes[r.n - 1], c: cats.includes(r.category) ? r.category : 'Other', name: r.name || '', on: r.category !== 'Other'})).filter(r => r.note);
+    const seen = new Set();
+    sortSug = (Array.isArray(res) ? res : []).map(r => { const e = items[r.n - 1]; if (!e || seen.has(e.note) || !cats.includes(r.category) || r.category === e.cur) return null; seen.add(e.note);
+      return {note: e.note, from: e.cur, c: r.category, name: r.name || '', count: e.n, on: r.category !== 'Other'}; }).filter(Boolean);
     renderSort();
   } catch (e) { $('sortBody').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 function renderSort() {
   const box = $('sortBody'); if (!box || !sortSug) return;
   const cats = CAT_NAMES.filter(c => c !== 'No description'), on = sortSug.filter(r => r.on).length;
-  box.innerHTML = `<p class="muted">Check the suggestions, change any category, untick what you don’t want. Pera remembers these for future imports too.</p>
-    <ul class="list implist sortlist">${sortSug.map((r, k) => `<li><button class="chk ${r.on ? 'on' : ''}" data-act="sort-tog" data-k="${k}" aria-label="${r.on ? 'Skip' : 'Use'} ${esc(r.note)}"><span>${r.on ? '✓' : ''}</span></button>
-      <span class="t">${esc(r.note)}${r.name && r.name.toLowerCase() !== r.note.toLowerCase() ? `<small>${esc(r.name)}</small>` : ''}</span>
-      <select data-k="${k}" class="sortsel" aria-label="Category for ${esc(r.note)}" style="--c:${catCol(r.c)}">${cats.map(c => `<option ${c === r.c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></li>`).join('')}</ul>
-    <button class="go" data-act="sort-apply" ${on ? '' : 'disabled'}>Apply ${on} categor${on === 1 ? 'y' : 'ies'}</button>`;
+  const row = r => { const k = sortSug.indexOf(r); return `<li><button class="chk ${r.on ? 'on' : ''}" data-act="sort-tog" data-k="${k}" aria-label="${r.on ? 'Skip' : 'Use'} ${esc(r.note)}"><span>${r.on ? '✓' : ''}</span></button>
+      <span class="t">${esc(r.note)}<small>${r.from !== 'Other' ? `Now <b class="catdot2" style="background:${catCol(r.from)}"></b>${esc(r.from)} · ` : ''}${r.count} entr${r.count === 1 ? 'y' : 'ies'}${r.name && r.name.toLowerCase() !== r.note.toLowerCase() ? ` · ${esc(r.name)}` : ''}</small></span>
+      <select data-k="${k}" class="sortsel" aria-label="Category for ${esc(r.note)}" style="--c:${catCol(r.c)}">${cats.map(c => `<option ${c === r.c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></li>`; };
+  const fix = sortSug.filter(r => r.from !== 'Other'), place = sortSug.filter(r => r.from === 'Other');
+  box.innerHTML = !sortSug.length ? `<p class="muted">Everything looks sorted correctly. Nothing to change.</p>`
+    : `<p class="muted">Check the suggestions, change any category, untick what you don’t want. Pera remembers these for future imports too.</p>
+    ${fix.length ? `<h3 class="sortsec">Looks miscategorized <span class="muted">${fix.length}</span></h3><ul class="list implist sortlist">${fix.map(row).join('')}</ul>` : ''}
+    ${place.length ? `<h3 class="sortsec">Not sorted yet <span class="muted">${place.length}</span></h3><ul class="list implist sortlist">${place.map(row).join('')}</ul>` : ''}
+    <button class="go" data-act="sort-apply" ${on ? '' : 'disabled'}>Apply ${on} change${on === 1 ? '' : 's'}</button>`;
   box.querySelectorAll('.sortsel').forEach(sel => sel.addEventListener('change', () => { const r = sortSug[+sel.dataset.k]; r.c = sel.value; r.on = true; renderSort(); }));
 }
 function applySort() {
@@ -1607,10 +1620,13 @@ function applySort() {
   for (const r of pick) {
     const m = merchantOf(r.note);
     if (m) S.meta.catRules[m] = r.c;
-    for (const y of Object.keys(S.years)) S.years[y].forEach(mo => mo.exp.forEach(x => { if (!x.c && x.n && x.n.trim() === r.note && catOf(x.n) !== r.c) { touched.push(x); x.c = r.c; keys.add('y' + y); } }));
+    for (const y of Object.keys(S.years)) S.years[y].forEach(mo => mo.exp.forEach(x => {
+      if (!x.n || x.n.trim() !== r.note || (x.c || catOf(x.n)) === r.c) return;
+      touched.push([x, x.c]); x.c = r.c; keys.add('y' + y);
+    }));
   }
   sortSug = null; closeSheet(); commit(...keys);
-  toast(`${pick.length} categor${pick.length === 1 ? 'y' : 'ies'} applied`, () => { S.meta.catRules = before.rules; touched.forEach(x => delete x.c); commit(...keys); });
+  toast(`${pick.length} change${pick.length === 1 ? '' : 's'} applied`, () => { S.meta.catRules = before.rules; touched.forEach(([x, c]) => { if (c === undefined) delete x.c; else x.c = c; }); commit(...keys); });
 }
 
 /* ---- AI cards: short write-ups on Home, each month, Savings and Bills (kept on this device) ---- */
@@ -1767,7 +1783,54 @@ function runSearch() {
 }
 
 /* ================= more reports (each in its own sheet) ================= */
-const REPORTS = [['trend', 'Spending trend', '≡'], ['cal', 'Spending calendar', '#'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '↓']];
+/* ---- income vs spending: monthly lines with your average salary and average spending ---- */
+const SALARY_RE = /inrem|payroll|salary|sahod|sweldo/i;   // same as the Salary name in INC_NAMES
+function flowData(n = 12) {
+  const t = today(), rows = lastMonths(n).map(m => { const f = monthFlows(m.y, m.i), mo = S.years[m.y][m.i];
+    const sal = mo.inc.filter(x => x.n && SALARY_RE.test(x.n)).reduce((a, x) => a + +x.a, 0);
+    return {...m, inc: f.inc, exp: f.exp, sal, now: +m.y === t.getFullYear() && m.i === t.getMonth()}; });
+  // trim empty months at the start (before you started tracking)
+  while (rows.length && !rows[0].inc && !rows[0].exp) rows.shift();
+  const done = rows.filter(r => !r.now && (r.inc || r.exp)), avg = k => done.length ? done.reduce((a, r) => a + r[k], 0) / done.length : 0;
+  const salMonths = done.filter(r => r.sal > 0).length, useSal = salMonths >= Math.max(2, done.length / 2);
+  const aIn = useSal ? done.filter(r => r.sal > 0).reduce((a, r) => a + r.sal, 0) / salMonths : avg('inc');
+  return {rows, done, useSal, aIn, aIncAll: avg('inc'), aExp: avg('exp')};
+}
+function flowSVG(svg, d, tips) {
+  const {rows, aIn, aExp, useSal} = d; if (rows.length < 2) { svg.outerHTML = '<p class="muted">Needs at least two months of data.</p>'; return; }
+  const W = svg.clientWidth || 340, H = svg.clientHeight || 180, pl = 42, pr = 70, pt = 10, pb = 22;
+  const hi = niceUp(Math.max(1, ...rows.map(r => Math.max(r.inc, r.exp)), aIn, aExp)), X = k => pl + k * (W - pl - pr) / (rows.length - 1), Y = v => pt + (1 - v / hi) * (H - pt - pb);
+  const line = (k, col) => { const pts = rows.map((r, j) => [X(j), Y(r[k])]), fin = rows.filter(r => !r.now).length;
+    const solid = pts.slice(0, fin).map((p, j) => (j ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(''), dash = fin < pts.length && fin ? `M${pts[fin - 1].join(' ')}L${pts[fin].join(' ')}` : '';
+    return `<path d="${solid}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>${dash ? `<path d="${dash}" fill="none" stroke="${col}" stroke-width="2" stroke-dasharray="3 4" stroke-linecap="round"/>` : ''}`
+      + pts.map((p, j) => rows[j].now ? `<circle cx="${p[0]}" cy="${p[1]}" r="4" fill="var(--card)" stroke="${col}" stroke-width="2"/>` : '').join(''); };
+  // average lines with end labels; nudge labels apart if they'd collide
+  let yi = Y(aIn), ye = Y(aExp); if (Math.abs(yi - ye) < 14) { const mid = (yi + ye) / 2, up = yi < ye ? -1 : 1; yi = mid + up * 7; ye = mid - up * 7; }
+  const avgLine = (v, ly, col, lbl) => v ? `<line x1="${pl}" x2="${W - pr}" y1="${Y(v)}" y2="${Y(v)}" stroke="${col}" stroke-dasharray="5 4" opacity=".55"/><text x="${W - pr + 9}" y="${ly + 4}" font-size="11" fill="var(--mute)">${lbl} ${esc(pesoS(v))}</text>` : '';
+  const step = Math.ceil(rows.length / 6);
+  svg.innerHTML = gridY(W, H, pl, pr, pt, pb, hi, pesoS)
+    + avgLine(aIn, yi, 'var(--blue)', 'avg') + avgLine(aExp, ye, 'var(--red)', 'avg')
+    + line('inc', 'var(--blue)') + line('exp', 'var(--red)')
+    + rows.map((r, j) => (j % step === 0 || j === rows.length - 1) && !(j !== rows.length - 1 && rows.length - 1 - j < step) ? `<text x="${X(j)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--mute)">${M[r.i].slice(0, 3)}</text>` : '').join('')
+    + (tips ? rows.map((r, j) => { const x0 = j ? (X(j - 1) + X(j)) / 2 : pl - 6, x1 = j < rows.length - 1 ? (X(j) + X(j + 1)) / 2 : W - pr + 6;
+        const tip = `<b>${M[r.i]} ${r.y}${r.now ? ' (so far)' : ''}</b><div><i style="background:var(--blue)"></i>Income <span>${esc(peso(r.inc))}</span></div>${useSal && r.sal ? `<div><i style="background:var(--blue);opacity:.5"></i>Salary <span>${esc(peso(r.sal))}</span></div>` : ''}<div><i style="background:var(--red)"></i>Spent <span>${esc(peso(r.exp))}</span></div><div class="tt">${r.inc >= r.exp ? 'Kept' : 'Over by'} <span>${esc(peso(Math.abs(r.inc - r.exp)))}</span></div>`;
+        return `<g class="hit" data-tip="${esc(tip)}"><rect x="${x0}" y="${pt}" width="${x1 - x0}" height="${H - pt - pb}" fill="transparent"/><line class="xh" x1="${X(j)}" x2="${X(j)}" y1="${pt}" y2="${H - pb}" stroke="var(--mute)" stroke-width="1"/><circle class="xh" cx="${X(j)}" cy="${Y(r.inc)}" r="4" fill="var(--blue)" stroke="var(--card)" stroke-width="2"/><circle class="xh" cx="${X(j)}" cy="${Y(r.exp)}" r="4" fill="var(--red)" stroke="var(--card)" stroke-width="2"/></g>`; }).join('') : '');
+}
+function flowStats(d) {
+  const keep = d.aIncAll - d.aExp, pct = d.aIncAll > 0 ? Math.round(keep / d.aIncAll * 100) : 0;
+  return `<div class="flowstats"><div><span>${d.useSal ? 'Avg salary' : 'Avg income'}</span><b class="up">${esc(pesoS(d.aIn))}</b></div><div><span>Avg spent</span><b class="dn">${esc(pesoS(d.aExp))}</b></div><div><span>${keep >= 0 ? 'Avg kept' : 'Avg over'}</span><b>${esc(pesoS(Math.abs(keep)))}${d.aIncAll > 0 ? ` <small>${Math.abs(pct)}%</small>` : ''}</b></div></div>`;
+}
+function homeFlow() {
+  const box = $('hFlow'); if (!box) return;
+  const d = flowData(12); if (d.done.length < 2) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `<div class="hhead"><h3>Income vs spending</h3><button class="plain" data-act="report" data-r="flow">Details</button></div>
+    ${flowStats(d)}${legendHTML([[d.useSal ? 'Income (dashed: avg salary)' : 'Income (dashed: average)', 'var(--blue)'], ['Spent (dashed: average)', 'var(--red)']])}
+    <button class="flowfigbtn" data-act="report" data-r="flow" aria-label="Open income vs spending details"><svg class="flowfig" aria-hidden="true"></svg></button>
+    <p class="muted flowfoot">Averages use the last ${d.done.length} finished month${d.done.length === 1 ? '' : 's'}${insTr ? '' : '; transfers between your accounts are left out'}.</p>`;
+  requestAnimationFrame(() => { const svg = box.querySelector('svg'); if (svg) flowSVG(svg, d, false); });
+}
+const REPORTS = [['flow', 'Income vs spending', '⇅'], ['trend', 'Spending trend', '≡'], ['cal', 'Spending calendar', '#'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '↓']];
 let repState = {months: 6, cal: null};
 const lastMonths = n => { const t = today(), out = []; for (let k = n - 1; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); if (S.years[d.getFullYear()]) out.push({y: String(d.getFullYear()), i: d.getMonth()}); } return out; };
 const niceUp = v => { if (v <= 0) return 1; const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e; };
@@ -1776,6 +1839,14 @@ function legendHTML(items) { return `<div class="legend2">${items.map(([l, c]) =
 function reportSheet(r) {
   const head = t => `<div class="sheethead"><h2>${t}</h2><button type="button" class="ghost" data-act="close">Done</button></div>`;
   let html = '', draw = null;
+  if (r === 'flow') {
+    const d = flowData(repState.months);
+    html = head('Income vs spending') + `<div class="seg repseg">${[6, 12].map(n => `<button data-act="rep-flow" data-n="${n}" aria-pressed="${repState.months === n}">${n} months</button>`).join('')}</div>
+      ${flowStats(d)}<p class="muted">${d.useSal ? 'Average salary counts the months your pay came in. ' : ''}Dashed lines are the averages of finished months; the open dot is this month so far. Tap a month for details.</p>
+      ${legendHTML([['Income', 'var(--blue)'], ['Spent', 'var(--red)']])}<div class="rfig"><svg id="repSvg" role="img" aria-label="Income and spending by month with average lines"></svg><div class="tip" id="repTip" hidden></div></div>
+      <details class="rtable"><summary>Show as table</summary><div class="tscroll"><table class="ytable"><thead><tr><th>Month</th><th>Income</th>${d.useSal ? '<th>Salary</th>' : ''}<th>Spent</th><th>Kept</th></tr></thead><tbody>${d.rows.map(x => `<tr><td>${M[x.i].slice(0, 3)} ${x.y.slice(2)}${x.now ? '*' : ''}</td><td>${esc(peso(x.inc))}</td>${d.useSal ? `<td>${esc(peso(x.sal))}</td>` : ''}<td>${esc(peso(x.exp))}</td><td>${esc(peso(x.inc - x.exp))}</td></tr>`).join('')}</tbody></table></div></details>`;
+    draw = svg => flowSVG(svg, d, true);
+  }
   if (r === 'trend') {
     const ms = lastMonths(repState.months), rows = ms.map(m => { const by = {}; spendingIn([m]).forEach(x => { if (x.cat === 'Transfers' && !insTr) return; const g = catGroup(x.cat); by[g] = (by[g] || 0) + x.a; }); return {...m, by, tot: Object.values(by).reduce((s, v) => s + v, 0)}; });
     const groups = [...CAT_SLOTS, 'Other', 'No description'].filter(g => rows.some(x => x.by[g] > 0));
@@ -3019,6 +3090,7 @@ document.addEventListener('click', e => {
     case 'change-pw': return newPasswordSheet(false);
     case 'sr-f': srch.f = d.k; document.querySelectorAll('[data-act=sr-f]').forEach(b => b.setAttribute('aria-pressed', b.dataset.k === d.k)); return runSearch();
     case 'rep-months': repState.months = +d.n; return reportSheet('trend');
+    case 'rep-flow': repState.months = +d.n; return reportSheet('flow');
     case 'cal-mv': { const c = repState.cal; const nd = new Date(c.y, c.i + +d.d, 1); repState.cal = {y: nd.getFullYear(), i: nd.getMonth()}; return reportSheet('cal'); }
     case 'goal-open': return goalSheet(d.g, false);
     case 'goal-edit': return goalSheet(d.g, true);

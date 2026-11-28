@@ -31,7 +31,8 @@ async def main():
     await ph.goto('http://localhost:8815/'); await ph.wait_for_timeout(700)
     await ph.click('#settingsBtn'); await ph.wait_for_timeout(300); await ph.set_input_files('#importFile',os.path.join(FIX,'sample-backup.json')); await ph.wait_for_timeout(900)
     await ph.evaluate("""() => { const d = JSON.parse(localStorage.getItem('pera:data:u1')), m = d.years['2026'][10];
-      [['VISA-GRAB MAKATI PH',550,'2026-11-03'],['VISA-fp*Food Panda',440,'2026-11-04'],['VISA-WL *Steam Purchase',600,'2026-11-05'],['ZZQ TRADING 0042',999,'2026-11-06']].forEach(([n,a,dd]) => m.exp.push({id: Math.random().toString(36).slice(2), n, a, d: dd}));
+      [['VISA-GRAB MAKATI PH',550,'2026-11-03'],['VISA-fp*Food Panda',440,'2026-11-04'],['VISA-WL *Steam Purchase',600,'2026-11-05'],['ZZQ TRADING 0042',999,'2026-11-06'],['ZZQ JOYRIDE 7781',230,'2026-11-07']].forEach(([n,a,dd]) => m.exp.push({id: Math.random().toString(36).slice(2), n, a, d: dd}));
+      m.exp.push({id: 'wrongcat', n: 'NETFLIX.COM 1234', a: 549, d: '2026-11-08', c: 'Food & drinks'});
       localStorage.setItem('pera:data:u1', JSON.stringify(d)); localStorage.setItem('pera:dirty:u1', JSON.stringify(['y2026'])); }""")
     await ph.reload(); await ph.wait_for_timeout(1200)
     # not set up yet
@@ -65,10 +66,10 @@ async def main():
     await ph.click('.tab[data-v=home]'); await ph.wait_for_timeout(500)
     # sort my spending
     await ph.click('[data-act=sort-spend]'); await ph.wait_for_timeout(900)
-    rows=[(await r.locator('.t').inner_text()).replace('\n',' / ')+' -> '+await r.locator('select').input_value() for r in await ph.locator('.sortlist li').all()]; print('sort suggestions:', rows)
+    rows=[(await r.locator('.t').inner_text()).replace('\n',' / ')+' -> '+await r.locator('select').input_value() for r in await ph.locator('.sortlist li').all()]; print('sort suggestions:', rows, '| sections:', await ph.locator('.sortsec').all_inner_texts())
     await ph.screenshot(path=OUT+'/ai_sort.png')
     await ph.select_option('.sortlist select >> nth=0', 'Shopping'); await ph.wait_for_timeout(200)
-    await ph.click('[data-act=sort-apply]'); await ph.wait_for_timeout(400); print('applied:', await ph.inner_text('#toastMsg'), '| rules:', await ph.evaluate("JSON.parse(localStorage.getItem('pera:data:u1')).meta.catRules"))
+    await ph.click('[data-act=sort-apply]'); await ph.wait_for_timeout(400); print('applied:', await ph.inner_text('#toastMsg'), '| rules:', await ph.evaluate("JSON.parse(localStorage.getItem('pera:data:u1')).meta.catRules"), '| netflix now:', await ph.evaluate("JSON.parse(localStorage.getItem('pera:data:u1')).years['2026'][10].exp.find(x=>x.id==='wrongcat').c"))
     await ph.click('#toastBtn'); await ph.wait_for_timeout(300); print('undo rules:', await ph.evaluate("JSON.parse(localStorage.getItem('pera:data:u1')).meta.catRules"))
     # add by talking
     await ph.click('.tab[data-v=months]'); await ph.click('#fab'); await ph.wait_for_timeout(400); await ph.click('[data-act=talk]'); await ph.wait_for_timeout(300)
