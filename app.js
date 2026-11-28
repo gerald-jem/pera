@@ -64,7 +64,7 @@ const kBase = () => 'pera:base:' + user.id;      // last copy agreed with the se
 const kSnaps = () => 'pera:snaps:' + user.id;    // safety copies kept on this device
 let base = {};
 let dataVer = 0;
-function saveLocal() { dataVer++; carveCache = null; store.set(kData(), S); store.set(kDirty(), [...dirty]); store.set(kBase(), base); }
+function saveLocal() { dataVer++; carveCache = null; if (typeof saveReminders === 'function') saveReminders(); store.set(kData(), S); store.set(kDirty(), [...dirty]); store.set(kBase(), base); }
 function loadLocal() {
   const d = store.get(kData()); S = d && d.meta ? d : blank();
   dirty = new Set(store.get(kDirty()) || []);
@@ -341,7 +341,9 @@ function pisoNow() {
   if (h >= 23 || h < 5) return {mood: 'sleepy', line: L ? `Late na! ${peso(Math.max(0, L.left))} left until ${md(L.next)}. Sleep on any big buys.` : 'Late na! Rest muna.'};
   if (!L) return {mood: 'calm', line: 'Add a couple of months of entries and I’ll keep an eye on your budget.'};
   const tight = P ? paydayData(P.base, P.target, P.cap).find(x => x.tight && daysBetween(todayIso(), x.date) <= 10) : null;
+  const ds = dueSoon()[0]; if (ds) { const n = daysBetween(todayIso(), ds.due); return {mood: 'worried', line: `${ds.name} ${peso(+ds.a)} is due ${n === 0 ? 'today' : n === 1 ? 'tomorrow' : `on ${md(ds.due)}`}. Tap Paid below once it’s done.`}; }
   if (L.left < 0) return {mood: 'worried', line: `We’re ${peso(-L.left)} over this pay period. Let’s keep it light until ${md(L.next)}.`};
+  const su = subscriptions().find(x => x.up && daysBetween(x.last, todayIso()) <= 40); if (su) return {mood: 'wince', line: `${su.name} went up to ${peso(su.monthly, 2)} (was ${peso(su.before, 2)}). Still worth it?`};
   if (tight) return {mood: 'worried', line: `Heads up: ${md(tight.date)} pays ${peso(tight.bt)} in bills. Set a little aside before then.`};
   if (L.perDay < (L.budget / 15) * 0.5) return {mood: 'calm', line: `Easy lang: about ${peso(L.perDay)} a day until ${md(L.next)}.`};
   return {mood: 'happy', line: `Kaya pa! About ${peso(L.perDay)} a day until ${md(L.next)}.`};
@@ -354,6 +356,7 @@ function pisoTips() {
   if (P) { const t = paydayData(P.base, P.target, P.cap).find(x => x.tight); if (t) out.push({mood: 'worried', line: `${md(t.date)} is a tight payday: ${peso(t.bt)} in bills from that pay.`}); }
   for (const g of goals()) { const c = goalCalc(g); if (c.done) { out.push({mood: 'cheer', line: `${g.name}: reached! 🎉`}); continue; } if (P && P.saved > 0) { const n = gMonths(c.cur, c.target, P.saved, c.r); if (isFinite(n)) out.push({mood: 'happy', line: `${g.name}: ${Math.round(c.prog * 100)}% there, around ${inMonths(n)} at your usual saving.`}); } }
   if (P && P.base > 0) out.push({mood: P.saved / P.base >= 0.2 ? 'cheer' : 'calm', line: `You save about ${Math.round(P.saved / P.base * 100)}% of your ${P.baseName}. ${P.saved / P.base >= 0.2 ? 'That’s solid!' : '20% is a good target.'}`});
+  const subs = subscriptions(); if (subs.length) out.push({mood: 'calm', line: `Your ${subs.length} subscription${subs.length === 1 ? '' : 's'} cost ${peso(Math.round(subs.reduce((s, x) => s + x.monthly, 0)))} a month. See Reports → Subscriptions.`});
   out.push({mood: 'happy', line: 'Tip: move savings on payday, before spending. Ask me anything with ✦ up top.'});
   return out;
 }
@@ -1413,7 +1416,7 @@ function spendingIn(months) {
   const rows = [];
   for (const {y, i} of months) {
     const m = S.years[y][i];
-    m.exp.forEach(x => rows.push({n: x.n || '', a: +x.a, y, i, c: x.c}));
+    m.exp.forEach(x => rows.push({n: x.n || '', a: +x.a, y, i, c: x.c, d: x.d}));
     billsIn(y, i).forEach(b => rows.push({n: b.name, a: +b.a, y, i, bill: true}));
   }
   const out = rows.map(r => ({...r, cat: r.c && CAT_NAMES.includes(r.c) ? r.c : catOf(r.n, r.bill)}));
@@ -1695,6 +1698,7 @@ function planningLines(ser) {
     P.own ? `- Their own monthly spending cap (set by them, use it): ${r(cap)}; Pera's suggestion would be ${r(P.suggested)} (${baseName} ${r(base)} − savings ${r(target)} − bills ${r(billsAvg)}). About ${r(cap / 2)} per pay period.`
       : `- Suggested monthly spending cap, not counting scheduled bills: ${r(cap)} (${baseName} ${r(base)} − savings ${r(target)} − bills ${r(billsAvg)}); about ${r(cap / 2)} per pay period, ${r(cap / 30)}/day.`,
     ...leftLines(),
+    ...(subscriptions().length ? [`- Repeating monthly charges (subscriptions): ${subscriptions().map(x => `${x.name} ${x.monthly.toFixed(2)}/month${x.up ? ` (up from ${x.before.toFixed(2)})` : ''}`).join('; ')}; total ${Math.round(subscriptions().reduce((s, x) => s + x.monthly, 0))}/month.`] : []),
     ...(funds().length ? [`- Set aside for known costs: ${funds().map(f => { const c = fundPer(f); return `${f.name} ${Math.round(f.target)} by ${f.due} (has ${Math.round(+f.have || 0)}, ${Math.ceil(c.per)} per payday)`; }).join('; ')}.`] : []),
     ...(S.meta.plan13 ? [`- Their 13th month plan (${S.meta.plan13.yr}): ${Math.round(S.meta.plan13.amount)} → tight paydays ${Math.round(S.meta.plan13.tight)}, safety net ${Math.round(S.meta.plan13.safety)}, for themselves ${Math.round(S.meta.plan13.treat)}${goals().filter(g => (S.meta.plan13.goals || {})[g.id]).map(g => `, ${g.name} ${Math.round(S.meta.plan13.goals[g.id])}`).join('')}${S.meta.plan13.extra ? `, extra savings ${Math.round(S.meta.plan13.extra)}` : ''}.`] : []),
     `- 50/30/20 of ${baseName}: needs ${r(base * .5)}, wants ${r(base * .3)}, savings ${r(base * .2)}.`,
@@ -2327,7 +2331,70 @@ function yearCard() {
   box.innerHTML = `<button class="yearbtn" data-act="report" data-r="year">${pisoOn() ? pisoSVG('cheer', 44) : ''}<span><b>Your ${d.yr} in review</b><span class="muted">${esc(peso(Math.round(d.saved)))} saved · ${Math.round(d.rate * 100)}% of income. Tap to see your year.</span></span></button>`;
 }
 
-const REPORTS = [['flow', 'Income vs spending', '⇅'], ['worth', 'Net worth', '▤'], ['year', 'Year in review', '★'], ['home', 'Home loan planner', '⌂'], ['trend', 'Spending trend', '≡'], ['cal', 'Spending calendar', '#'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '↓']];
+/* ---- subscriptions: charges that repeat every month at about the same price; flags price rises ---- */
+const SUB_RE = /netflix|spotify|youtube|apple\.com|itunes|icloud|google|disney|viu|hbo|prime video|amazon prime|chatgpt|openai|adobe|canva|xbox|playstation|nintendo|microsoft|office ?365|dropbox|notion|patreon|discord|crunchyroll|iwant|vivamax|globe|smart|pldt|converge|gym|fitness/i;
+let subsCache = {v: -1, list: []};
+function subscriptions() {
+  if (subsCache.v === dataVer) return subsCache.list;
+  const ms = lastMonths(7), rows = spendingIn(ms).filter(r => r.a > 0 && !r.bill && r.cat !== 'Transfers' && !r.saved), g = {};
+  rows.forEach(r => { const m = merchantOf(r.n); if (!m) return; (g[m] = g[m] || []).push(r); });
+  const med = a => { const b = a.slice().sort((x, y) => x - y), k = b.length >> 1; return b.length % 2 ? b[k] : (b[k - 1] + b[k]) / 2; };
+  const out = [];
+  for (const [name, list] of Object.entries(g)) {
+    const months = new Set(list.map(r => `${r.y}-${r.i}`)), known = list.some(r => SUB_RE.test(r.n));
+    if (months.size < (known ? 2 : 3) || list.length > months.size * 2) continue;          // repeats monthly, not several times a month
+    const byDate = list.slice().sort((a, b) => (a.d || `${a.y}-${String(a.i + 1).padStart(2, '0')}-15`).localeCompare(b.d || `${b.y}-${String(b.i + 1).padStart(2, '0')}-15`));
+    const amts = byDate.map(r => +r.a), m = med(amts), spread = med(amts.map(a => Math.abs(a - m))) / m;
+    if (spread > (known ? 0.35 : 0.12)) continue;                                            // a fairly fixed price
+    const last = byDate[byDate.length - 1], prev = amts.slice(0, -1), before = prev.length ? med(prev) : m, up = last.a - before;
+    const lastD = last.d || `${last.y}-${String(last.i + 1).padStart(2, '0')}-15`, nd = new Date(dnum(lastD)); nd.setMonth(nd.getMonth() + 1);
+    out.push({name, monthly: +last.a, year: +last.a * 12, last: lastD, next: iso(nd), count: list.length, up: up >= Math.max(5, before * 0.03) ? up : 0, before, cat: last.cat, known});
+  }
+  out.sort((a, b) => b.monthly - a.monthly);
+  subsCache = {v: dataVer, list: out}; return out;
+}
+function subsHTML() {
+  const L = subscriptions(), tot = L.reduce((s, x) => s + x.monthly, 0), md = d => fmtDate(d, {month: 'short', day: 'numeric'});
+  if (!L.length) return '<p class="empty">No repeating monthly charges found in the last 7 months.</p>';
+  return `<p class="ybig" style="margin:2px 0">${esc(peso(Math.round(tot)))}<span class="muted" style="font-size:16px;font-family:Inter,sans-serif"> a month</span></p>
+    <p class="muted">${esc(peso(Math.round(tot * 12)))} a year across ${L.length} repeating charge${L.length === 1 ? '' : 's'}. Anything you don’t use any more?</p>
+    <ul class="list capcats">${L.map(x => `<li><span class="t">${esc(x.name)}${x.up ? ` <span class="pill dn">up ${esc(peso(x.up, 2))}</span>` : ''}<small>${esc(peso(Math.round(x.year)))} a year · last ${esc(md(x.last))} · next around ${esc(md(x.next))}${x.up ? ` · was ${esc(peso(x.before, 2))}` : ''}</small></span><b class="amt">${esc(peso(x.monthly, 2))}</b></li>`).join('')}</ul>
+    <p class="muted">Found from charges that repeat each month at about the same price. Something missing? Give it a clear note when you add it.</p>`;
+}
+
+/* ---- reminders: bills due soon and paydays, as phone notifications (checked in the background when the phone allows) ---- */
+const remindOn = () => store.get('pera:remind') === true;
+function reminderList() {
+  const out = [], t = todayIso(), until = addDays(t, 21), md = d => fmtDate(d, {month: 'short', day: 'numeric'});
+  (S.meta.bills || []).filter(b => !b.paid && b.due && b.due >= t && b.due <= until).forEach(b => {
+    const k = `${b.name}|${b.due}|${b.a}`;
+    out.push({id: 'b2|' + k, date: addDays(b.due, -2), title: `${b.name} due ${md(b.due)}`, body: `${peso(+b.a, 2)} in 2 days. Open Pera to mark it paid.`});
+    out.push({id: 'b0|' + k, date: b.due, title: `${b.name} is due today`, body: `${peso(+b.a, 2)}. Mark it paid in Pera when done.`});
+  });
+  const P = planNumbers();
+  if (P) paydayData(P.base, P.target, P.cap).forEach(x => out.push({id: 'pd|' + x.date, date: x.date, title: 'Payday!', body: `Move ${peso(Math.round(x.save))} to savings first.${x.bt ? ` Bills from this pay: ${peso(Math.round(x.bt))}.` : ''} About ${peso(Math.max(0, Math.round(x.left)))} left to spend.`}));
+  return out.filter(x => x.date >= addDays(t, -1));
+}
+let remindTimer = null;
+function saveReminders() {
+  clearTimeout(remindTimer);
+  remindTimer = setTimeout(async () => { if (!remindOn() || !('caches' in window)) return; try { const c = await caches.open('pera-remind'); await c.put('reminders.json', new Response(JSON.stringify(reminderList()), {headers: {'content-type': 'application/json'}})); } catch {} }, 800);
+}
+async function remindToggle() {
+  if (remindOn()) { store.set('pera:remind', false); try { const r = await navigator.serviceWorker.ready; if (r.periodicSync) await r.periodicSync.unregister('pera-reminders'); } catch {} toast('Reminders off'); return settings(); }
+  if (!('Notification' in window)) return toast('This browser can’t show notifications.');
+  const perm = await Notification.requestPermission(); if (perm !== 'granted') return toast('Notifications are blocked. Allow them for Pera in your phone’s settings.');
+  store.set('pera:remind', true); saveReminders();
+  let bg = false;
+  try { const r = await navigator.serviceWorker.ready; if (r.periodicSync) { const st = await navigator.permissions.query({name: 'periodic-background-sync'}); if (st.state === 'granted') { await r.periodicSync.register('pera-reminders', {minInterval: 12 * 3600e3}); bg = true; } } } catch {}
+  store.set('pera:remindBg', bg);
+  toast(bg ? 'Reminders on: Pera checks in the background a couple of times a day' : 'Reminders on while Pera is open. Install Pera to your home screen for background reminders.');
+  settings();
+}
+// due today / in two days: say it when the app opens too
+function dueSoon() { const t = todayIso(); return (S.meta.bills || []).filter(b => !b.paid && b.due && b.due >= t && daysBetween(t, b.due) <= 2).sort((a, b) => a.due.localeCompare(b.due)); }
+
+const REPORTS = [['flow', 'Income vs spending', '⇅'], ['subs', 'Subscriptions', '↻'], ['worth', 'Net worth', '▤'], ['year', 'Year in review', '★'], ['home', 'Home loan planner', '⌂'], ['trend', 'Spending trend', '≡'], ['cal', 'Spending calendar', '#'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '↓']];
 let repState = {months: 6, cal: null};
 const lastMonths = n => { const t = today(), out = []; for (let k = n - 1; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); if (S.years[d.getFullYear()]) out.push({y: String(d.getFullYear()), i: d.getMonth()}); } return out; };
 const niceUp = v => { if (v <= 0) return 1; const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e; };
@@ -2337,6 +2404,7 @@ function reportSheet(r) {
   const head = t => `<div class="sheethead"><h2>${t}</h2><button type="button" class="ghost" data-act="close">Done</button></div>`;
   let html = '', draw = null;
   if (r === 'year') return yearSheet();
+  if (r === 'subs') { html = head('Subscriptions') + subsHTML(); }
   if (r === 'home') return homeSheet();
   if (r === 'worth') {
     const w = worthData(); if (!w) return toast('Add some entries first.');
@@ -2888,6 +2956,9 @@ function settings() {
       <button class="switch" role="switch" aria-checked="${look().style === 'colorful'}" data-act="look" data-k="style" data-v="${look().style === 'colorful' ? 'plain' : 'colorful'}" aria-label="Colourful"></button></div>
     <div class="switchrow"><span><b>Piso, the coin buddy</b><br><span class="muted">Shows how your budget is doing and reacts when you add entries.</span></span>
       <button class="switch" role="switch" aria-checked="${pisoOn()}" data-act="look" data-k="mascot" data-v="${pisoOn() ? 'off' : 'on'}" aria-label="Piso, the coin buddy"></button></div>
+    <h2>Reminders</h2>
+    <div class="switchrow"><span><b>Bills and paydays</b><br><span class="muted">${remindOn() ? (store.get('pera:remindBg') ? 'On. Your phone lets Pera check in the background about twice a day, so a reminder can come a few hours early or late.' : 'On while Pera is open. Install Pera to your home screen (and allow background activity) to get them when it’s closed.') : 'A notification two days before a bill is due, on the due date, and on paydays with how much to save.'}</span></span>
+      <button class="switch" role="switch" aria-checked="${remindOn()}" data-act="remind" aria-label="Bill and payday reminders"></button></div>
     <h2>App lock</h2>
     <div class="switchrow"><span><b>Lock with fingerprint</b><br><span class="muted">Asks for your fingerprint or face when you open Pera and after a minute away. This device only.</span></span>
       <button class="switch" role="switch" aria-checked="${!!lockState}" data-act="lock-toggle" aria-label="Lock with fingerprint"></button></div>
@@ -3763,6 +3834,7 @@ document.addEventListener('click', e => {
     case 'ask': return askSheet();
     case 'ask-q': return askPera(d.q);
     case 'cap-set': return capSheet();
+    case 'remind': return remindToggle();
     case 'hl-goal': closeSheet(); return goalNew(+d.a, 'House down payment');
     case 'yr-share': { const t = yearShare; if (navigator.share) navigator.share({text: t}).catch(() => {}); else navigator.clipboard.writeText(t).then(() => toast('Copied, paste it anywhere')).catch(() => toast(t)); return; }
     case 'fund-new': return fundSheet();
@@ -4035,6 +4107,7 @@ async function start(u) {
   await push();
   setTimeout(resumeAiCards, 1500);   // write-ups asked for before the app was closed
   setTimeout(takeShared, 400);       // screenshots shared into Pera from another app
+  if (remindOn()) { saveReminders(); setTimeout(() => { try { navigator.serviceWorker && navigator.serviceWorker.controller && navigator.serviceWorker.controller.postMessage('check-reminders'); } catch {} }, 2500); }
 }
 function stop(msg) { hideToast(); locked = false; $('lockScreen').hidden = true; document.documentElement.classList.remove('applock'); closeSheet(); user = null; S = blank(); dirty = new Set(); showAuth(msg); }
 

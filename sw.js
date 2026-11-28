@@ -1,11 +1,12 @@
 // Pera service worker: network first, cache as the offline fallback.
 // Bump VERSION whenever app files change.
-const VERSION = 'pera-v72';
+const VERSION = 'pera-v73';
 // big files that rarely change (screenshot + PDF readers, fonts, Supabase): kept across app updates.
 // Bump VENDOR only when something in vendor/ changes.
 const VENDOR = 'pera-vendor-1';
-const SHARE = 'pera-share';   // screenshots shared into Pera from other apps, until the app picks them up
-const SHELL = ['./', 'index.html', 'style.css?v=72', 'money.js?v=72', 'app.js?v=72', 'config.js?v=72',
+const SHARE = 'pera-share';
+const REMIND = 'pera-remind';   // upcoming reminders written by the app, plus which ones were already shown   // screenshots shared into Pera from other apps, until the app picks them up
+const SHELL = ['./', 'index.html', 'style.css?v=73', 'money.js?v=73', 'app.js?v=73', 'config.js?v=73',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -17,7 +18,7 @@ self.addEventListener('install', e => {
   ]));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== VENDOR && k !== SHARE).map(k => caches.delete(k))))
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== VENDOR && k !== SHARE && k !== REMIND).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 // Same-origin GETs: try the network, fall back to the cached copy when offline.
@@ -51,4 +52,21 @@ self.addEventListener('fetch', e => {
       return (await cache.match(e.request)) || (e.request.mode === 'navigate' ? cache.match('index.html') : Response.error());
     }
   })());
+});
+
+// Reminders: the phone wakes the service worker now and then (periodic background sync) and we show what's due
+async function showDueReminders() {
+  const c = await caches.open(REMIND), r = await c.match('reminders.json'); if (!r) return;
+  const list = await r.json(), shownR = await c.match('shown.json'), shown = shownR ? await shownR.json() : [];
+  const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const due = list.filter(x => x.date === today && !shown.includes(x.id));
+  const done = [];
+  for (const x of due) { try { await self.registration.showNotification(x.title, {body: x.body, tag: x.id, icon: 'icon-192.png', badge: 'icon-192.png', data: {url: './'}}); done.push(x.id); } catch { /* not allowed right now: try again next time */ } }
+  if (done.length) await c.put('shown.json', new Response(JSON.stringify([...shown, ...done].slice(-200))));
+}
+self.addEventListener('periodicsync', e => { if (e.tag === 'pera-reminders') e.waitUntil(showDueReminders()); });
+self.addEventListener('message', e => { if (e.data === 'check-reminders') e.waitUntil(showDueReminders()); });
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({type: 'window', includeUncontrolled: true}).then(ws => { const w = ws.find(x => 'focus' in x); return w ? w.focus() : self.clients.openWindow('./'); }));
 });
