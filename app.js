@@ -310,7 +310,7 @@ function renderHome(ser) {
   const prev = ser[ser.indexOf(cur) - 1];
   if (prev) { const d = cur.total - prev.total; $('homeChg').innerHTML = `<span class="${d >= 0 ? 'up' : 'dn'}">${d >= 0 ? '▲' : '▼'} ${esc(peso(Math.abs(d)))}</span> vs ${esc(M[prev.i])}`; }
   else $('homeChg').textContent = '';
-  homeMonth(cur, prev); homeBills(); homeNotes(cur, ser);
+  homeMonth(cur, prev); homeBills(); homeNotes(cur, ser); homeSummary();
   $('homeList').innerHTML = '';
   const ml = $('homeMonthLink'); ml.hidden = false; ml.dataset.y = cur.y; ml.dataset.i = cur.i;
   ml.textContent = `See all of ${M[cur.i]}’s entries →`;
@@ -1314,6 +1314,7 @@ function renderInsights(ser) {
   const rate = (inc, exp) => inc > 0 ? Math.round((inc - exp) / inc * 100) : null;
 
   box.innerHTML = `<div class="inshead"><h2>Insights</h2><div class="seg insseg">${[['month', 'This month'], ['3m', '3 months'], ['year', 'This year'], ['lastyear', 'Last year']].map(([k, l]) => `<button data-act="ins-p" data-k="${k}" aria-pressed="${k === insP}">${l}</button>`).join('')}</div></div>
+  <button class="aibar" data-act="sort-spend"><span class="sparkic">${SPARK}</span><span>Sort my spending<small>AI suggests categories for bank text Pera couldn’t place</small></span><span class="chev">›</span></button>
   <div class="reports">${REPORTS.map(([k, l, ic]) => `<button class="repbtn" data-act="report" data-r="${k}"><span class="repic" aria-hidden="true">${ic}</span>${l}</button>`).join('')}</div>
   <div class="insgrid">
     <section class="card inscard"><div class="inshead"><h3>Where your money goes</h3><button class="chip trchip" data-act="ins-tr" aria-pressed="${insTr}">${insTr ? '✓ ' : ''}Include transfers</button></div>
@@ -1340,6 +1341,210 @@ function renderInsights(ser) {
           ${topM ? `<li>Top merchant: <b>${esc(topM[0])}</b> (${esc(peso(topM[1]))})</li>` : ''}
         </ul>${+insYear === t.getFullYear() ? '<p class="muted">So far this year.</p>' : ''}` : '<p class="empty">No months recorded yet for this year.</p>'}</section>
   </div>`;
+}
+
+/* ================= Pera AI (Gemini, through the "pera-ai" Supabase function; the key never touches this device) ================= */
+const AI_MS = 60000;
+let aiOk = store.get('pera:aiOk');   // null = unknown, true = worked before, false = not set up
+const SPARK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
+async function ai(task, payload) {
+  if (!sb || !user) throw new Error('Sign in first.');
+  if (!navigator.onLine) throw new Error('You’re offline. Pera AI needs the internet.');
+  let res;
+  try { res = await Promise.race([sb.functions.invoke('pera-ai', {body: {task, ...payload}}), new Promise((_, rej) => setTimeout(() => rej(new Error('The AI took too long. Try again.')), AI_MS))]); }
+  catch (e) { throw e; }
+  const {data, error} = res;
+  if (error) {
+    let msg = error.message || 'Pera AI didn’t answer.';
+    const status = error.context && error.context.status;
+    try { const j = await error.context.json(); if (j && (j.error || j.message)) msg = j.error || j.message; } catch {}
+    if (/exhausted|quota|rate limit|429/i.test(msg)) msg = 'Gemini’s free limit is used up for now. Try again in a minute, or tomorrow if it’s the daily limit.';
+    if (status === 404 || /requested function was not found|function not found/i.test(msg)) { aiOk = false; store.set('pera:aiOk', false); msg = 'Pera AI isn’t set up yet. See Settings → Pera AI.'; }
+    throw new Error(msg);
+  }
+  if (data && data.error) throw new Error(data.error);
+  aiOk = true; store.set('pera:aiOk', true);
+  return data.text || '';
+}
+const aiJSON = async (task, payload) => { const t = await ai(task, {...payload, json: true}); try { return JSON.parse(t); } catch { const m = t.match(/[\[{][\s\S]*[\]}]/); if (m) return JSON.parse(m[0]); throw new Error('The AI answer couldn’t be read. Try again.'); } };
+// plain text from the AI → safe HTML (escape first, then **bold**, bullet lines, paragraphs)
+function aiHTML(t) {
+  const lines = esc(String(t).trim()).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').split(/\n/);
+  let h = '', inList = false;
+  for (const l of lines) {
+    const m = /^\s*(?:[-*•]|\d+[.)])\s+(.*)/.exec(l);
+    if (m) { if (!inList) { h += '<ul>'; inList = true; } h += `<li>${m[1]}</li>`; continue; }
+    if (inList) { h += '</ul>'; inList = false; }
+    if (l.trim()) h += `<p>${l.replace(/^#+\s*/, '')}</p>`;
+  }
+  return h + (inList ? '</ul>' : '');
+}
+// what the AI is told about your money: compact lines, numbers already worked out by Pera
+function aiContext(opts = {}) {
+  const t = today(), ser = series().filter(p => p.inc || p.exp), L = [];
+  L.push(`Today: ${todayIso()} (${t.toLocaleDateString('en-PH', {weekday: 'long'})}). Currency: Philippine peso (₱). Paid on the 15th and 30th; ${payCut() ? `bills due on the ${ord(payCut())} or later count in their own month, earlier ones in the month before` : 'bills count in the month before they are due'}.`);
+  L.push('Months (income | spent incl. bills | saved | total money at month end):');
+  ser.slice(-18).forEach(p => L.push(`${p.y}-${String(p.i + 1).padStart(2, '0')}${p.now ? ' (this month, so far)' : p.past ? '' : ' (planned)'}: ${Math.round(p.inc)} | ${Math.round(p.exp)} | ${Math.round(p.sav)} | ${Math.round(p.total)}`));
+  L.push('Spending by category per month (transfers between own accounts left out):');
+  lastMonths(6).forEach(m => { const by = {}; spendingIn([m]).forEach(r => { if (r.cat !== 'Transfers') by[r.cat] = (by[r.cat] || 0) + r.a; }); L.push(`${m.y}-${String(m.i + 1).padStart(2, '0')}: ${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([c, v]) => `${c} ${Math.round(v)}`).join(', ') || 'none'}`); });
+  const un = (S.meta.bills || []).filter(b => !b.paid && b.due && b.due >= todayIso()).sort((a, b) => a.due.localeCompare(b.due));
+  L.push(`Unpaid upcoming bills: ${un.length ? un.map(b => { const m = billMonth(b.due); return `${b.name} ${(+b.a).toFixed(2)} due ${b.due} (counted in ${m.y}-${String(m.i + 1).padStart(2, '0')})`; }).join('; ') : 'none'}`);
+  const ps = pots(); if (ps.length) L.push(`Savings accounts: ${ps.map(p => `${p.name} (${p.kind === 'td' ? 'time deposit' : p.kind === 'mp2' ? 'Pag-IBIG MP2' : 'savings account'}) ${Math.round(potNow(p))} now, ${(netRate(p) * 100).toFixed(2)}%/yr after tax`).join('; ')}`);
+  const gs = goals(); if (gs.length) L.push(`Goals: ${gs.map(g => { const c = goalCalc(g); return `${g.name}: ${Math.round(c.cur)} of ${Math.round(c.target)}${g.by ? `, wants it by ${g.by} (needs ${Math.round(c.need || 0)}/month)` : ''}`; }).join('; ')}`);
+  const h = habits(); if (h.n) L.push(`Last ${h.n} finished months on average: saved ${Math.round(h.save)}/month, left over after spending and saving ${Math.round(h.left)}/month.`);
+  if (opts.entries) {
+    L.push('Individual entries, newest first (date | type | note | amount | category):'); let n = 0;
+    outer: for (const m of lastMonths(opts.months || 4).reverse()) { const mo = S.years[m.y][m.i];
+      const rows = [...mo.exp.map(x => ['out', x]), ...mo.inc.map(x => ['in', x])].sort((a, b) => (b[1].d || '').localeCompare(a[1].d || ''));
+      for (const [k, x] of rows) { L.push(`${x.d || `${m.y}-${String(m.i + 1).padStart(2, '0')} (no exact day)`} | ${k} | ${x.n || 'no note'} | ${(+x.a).toFixed(2)} | ${k === 'out' ? (x.c || catOf(x.n || '')) : 'income'}`); if (++n >= 700) break outer; } }
+  }
+  return L.join('\n');
+}
+const AI_RULES = 'You are Pera, a friendly money helper inside a personal finance app for someone in the Philippines. Use only the data given; when it doesn’t cover something, say so plainly. Show peso amounts like ₱1,234. Be brief and concrete: lead with the answer, then a few short lines or bullets. "No description" means spending recorded without a note, mostly from an old spreadsheet. You are not a licensed financial adviser: for investment, tax or legal decisions give general information and suggest checking with a professional.';
+
+/* ---- Ask Pera: chat about your money ---- */
+let chat = [];
+function askSheet() {
+  openSheet(`<div class="sheethead"><h2>Ask Pera</h2><button type="button" class="ghost" data-act="close">Done</button></div>
+    <div class="chat" id="chatLog" aria-live="polite">${chat.length ? '' : `<p class="muted">Ask anything about your money. Pera sends a summary of your numbers to Google Gemini to answer.</p>`}</div>
+    <div class="chips aisugg" id="chatSugg">${chat.length ? '' : ['How much did I spend on food last month?', 'Where can I cut back?', 'Can I afford ₱30,000 in February?', 'When will I reach my goal?', 'What bills are coming up?'].map(q => `<button class="chip" data-act="ask-q" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+    <form id="chatF" class="chatf" novalidate><input id="chatQ" autocomplete="off" enterkeyhint="send" placeholder="Ask about your money…" aria-label="Your question"><button class="go" type="submit" aria-label="Send">${SPARK}</button></form>`);
+  $('sheet').classList.add('tall'); paintChat();
+  $('chatF').addEventListener('submit', e => { e.preventDefault(); const q = $('chatQ').value.trim(); if (q) { $('chatQ').value = ''; askPera(q); } });
+  setTimeout(() => $('chatQ') && $('chatQ').focus(), 80);
+}
+function paintChat(thinking) {
+  const log = $('chatLog'); if (!log) return;
+  if (chat.length) log.innerHTML = chat.map(m => m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>` : `<div class="msg ai${m.err ? ' err' : ''}">${m.err ? esc(m.text) : aiHTML(m.text)}</div>`).join('') + (thinking ? '<div class="msg ai thinking"><i></i><i></i><i></i></div>' : '');
+  const sg = $('chatSugg'); if (sg && chat.length) sg.innerHTML = '';
+  log.scrollIntoView({block: 'end'}); $('sheet').scrollTop = $('sheet').scrollHeight;
+}
+async function askPera(q) {
+  chat.push({role: 'user', text: q}); paintChat(true);
+  const needRows = /\b(spent|spend|bought|paid|grab|jollibee|shopee|lazada|food|transaction|entry|entries|where|which|list|biggest|most)\b/i.test(q);
+  try {
+    const text = await ai('ask', {system: AI_RULES + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: chat.filter(m => !m.err).slice(-12).map(m => ({role: m.role, text: m.text})), maxTokens: 900});
+    chat.push({role: 'model', text});
+  } catch (e) { chat.push({role: 'model', text: e.message, err: true}); }
+  paintChat();
+}
+
+/* ---- Sort my spending: the AI suggests categories for bank text it can't place; you approve ---- */
+let sortSug = null;
+async function sortSpending() {
+  const by = {};
+  for (const y of Object.keys(S.years)) S.years[y].forEach(m => m.exp.forEach(x => { if (!x.n || x.c) return; const c = catOf(x.n); if (c === 'Other') { const k = x.n.trim(); by[k] = (by[k] || 0) + 1; } }));
+  const notes = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 120).map(x => x[0]);
+  const nod = spendingIn(lastMonths(12)).filter(r => r.cat === 'No description').length;
+  openSheet(`<div class="sheethead"><h2>Sort my spending</h2><button type="button" class="ghost" data-act="close">Cancel</button></div><div id="sortBody"><p class="muted">${notes.length ? `Asking the AI about ${notes.length} note${notes.length === 1 ? '' : 's'} Pera couldn’t place…` : 'Everything with a note already has a category.'}</p>${notes.length ? '<div class="msg ai thinking"><i></i><i></i><i></i></div>' : ''}${nod ? `<p class="muted">${nod} entries have no note at all, so there’s nothing to sort them by. Adding a short note to big ones helps.</p>` : ''}</div>`);
+  if (!notes.length) return;
+  const cats = CAT_NAMES.filter(c => c !== 'No description');
+  try {
+    const res = await aiJSON('sort', {system: AI_RULES, maxTokens: 4000,
+      messages: [{role: 'user', text: `Put each Philippine bank/e-wallet transaction note into one category: ${cats.join(', ')}. Use "Transfers" for moving money to the person's own accounts or other people (InstaPay/PESONet sends, "Sent to", "Transfer to"). Use "Other" only when nothing fits. Also give a short clean shop/payee name.\nNotes:\n${notes.map((n, k) => `${k + 1}. ${n}`).join('\n')}`}],
+      schema: {type: 'ARRAY', items: {type: 'OBJECT', properties: {n: {type: 'INTEGER'}, category: {type: 'STRING', enum: cats}, name: {type: 'STRING'}}, required: ['n', 'category']}}});
+    sortSug = (Array.isArray(res) ? res : []).map(r => ({note: notes[r.n - 1], c: cats.includes(r.category) ? r.category : 'Other', name: r.name || '', on: r.category !== 'Other'})).filter(r => r.note);
+    renderSort();
+  } catch (e) { $('sortBody').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+function renderSort() {
+  const box = $('sortBody'); if (!box || !sortSug) return;
+  const cats = CAT_NAMES.filter(c => c !== 'No description'), on = sortSug.filter(r => r.on).length;
+  box.innerHTML = `<p class="muted">Check the suggestions, change any category, untick what you don’t want. Pera remembers these for future imports too.</p>
+    <ul class="list implist sortlist">${sortSug.map((r, k) => `<li><button class="chk ${r.on ? 'on' : ''}" data-act="sort-tog" data-k="${k}" aria-label="${r.on ? 'Skip' : 'Use'} ${esc(r.note)}"><span>${r.on ? '✓' : ''}</span></button>
+      <span class="t">${esc(r.note)}${r.name && r.name.toLowerCase() !== r.note.toLowerCase() ? `<small>${esc(r.name)}</small>` : ''}</span>
+      <select data-k="${k}" class="sortsel" aria-label="Category for ${esc(r.note)}" style="--c:${catCol(r.c)}">${cats.map(c => `<option ${c === r.c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></li>`).join('')}</ul>
+    <button class="go" data-act="sort-apply" ${on ? '' : 'disabled'}>Apply ${on} categor${on === 1 ? 'y' : 'ies'}</button>`;
+  box.querySelectorAll('.sortsel').forEach(sel => sel.addEventListener('change', () => { const r = sortSug[+sel.dataset.k]; r.c = sel.value; r.on = true; renderSort(); }));
+}
+function applySort() {
+  const pick = sortSug.filter(r => r.on); if (!pick.length) return;
+  const before = JSON.parse(JSON.stringify({rules: S.meta.catRules || {}})), touched = [], keys = new Set(['meta']);
+  S.meta.catRules = {...(S.meta.catRules || {})};
+  for (const r of pick) {
+    const m = merchantOf(r.note);
+    if (m) S.meta.catRules[m] = r.c;
+    for (const y of Object.keys(S.years)) S.years[y].forEach(mo => mo.exp.forEach(x => { if (!x.c && x.n && x.n.trim() === r.note && catOf(x.n) !== r.c) { touched.push(x); x.c = r.c; keys.add('y' + y); } }));
+  }
+  sortSug = null; closeSheet(); commit(...keys);
+  toast(`${pick.length} categor${pick.length === 1 ? 'y' : 'ies'} applied`, () => { S.meta.catRules = before.rules; touched.forEach(x => delete x.c); commit(...keys); });
+}
+
+/* ---- Monthly summary: a short recap in plain words (kept on this device per month) ---- */
+function summaryMonth() { const t = today(); return t.getDate() >= 25 ? {y: String(t.getFullYear()), i: t.getMonth()} : (d => ({y: String(d.getFullYear()), i: d.getMonth()}))(new Date(t.getFullYear(), t.getMonth() - 1, 1)); }
+function homeSummary() {
+  const box = $('hSum'); if (!box) return;
+  const m = summaryMonth(); if (!S.years[m.y]) { box.hidden = true; return; }
+  const saved = store.get(`pera:sum:${m.y}-${m.i}`);
+  box.hidden = false;
+  box.innerHTML = `<div class="hhead"><h3><span class="sparkic">${SPARK}</span>${M[m.i]} in words</h3>${saved ? '<button class="plain" data-act="sum-make">Rewrite</button>' : ''}</div>
+    ${saved ? `<div class="aitext">${aiHTML(saved.text)}</div><p class="muted aifoot">Written by AI ${esc(new Date(saved.at).toLocaleDateString('en-PH', {month: 'short', day: 'numeric'}))} · check the numbers in Months</p>`
+      : `<p class="muted">A short recap of ${M[m.i]}: what changed, and one or two things to try. Uses Google Gemini.</p><button class="ghost wide" data-act="sum-make">${SPARK}Write my summary</button>`}`;
+}
+async function makeSummary() {
+  const m = summaryMonth(), box = $('hSum'); if (!box) return;
+  box.querySelectorAll('button').forEach(b => { b.disabled = true; }); box.insertAdjacentHTML('beforeend', '<div class="msg ai thinking"><i></i><i></i><i></i></div>');
+  try {
+    const text = await ai('summary', {system: AI_RULES, maxTokens: 700, messages: [{role: 'user', text: `Data:\n${aiContext()}\n\nWrite a recap of ${M[m.i]} ${m.y} in under 110 words for the person. Three short parts: one line on how the month went overall (income, spending, what was kept); 2–3 bullets on the biggest changes against their usual months, with peso amounts; then one or two specific, doable tips based on the numbers. Friendly, no headings, no greeting.`}]});
+    store.set(`pera:sum:${m.y}-${m.i}`, {text, at: Date.now()});
+  } catch (e) { toast(e.message); }
+  homeSummary();
+}
+
+/* ---- Add by talking: several entries from one sentence ---- */
+let talk = null;
+function talkSheet(prefill) {
+  openSheet(`<div class="sheethead"><h2>Add by talking</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
+    <p class="muted">Type or use your keyboard’s mic. Several things at once is fine.</p>
+    <textarea id="talkQ" rows="3" autocomplete="off" spellcheck="false" placeholder="grab 550 and jollibee 180 yesterday, salary 25k on the 15th, meralco 2,340 due dec 20">${esc(prefill || '')}</textarea>
+    <button class="go" data-act="talk-go">${SPARK}Read it</button><div id="talkOut"></div>`);
+  setTimeout(() => $('talkQ') && $('talkQ').focus(), 80);
+}
+async function talkRead() {
+  const q = $('talkQ').value.trim(); if (!q) { $('talkQ').focus(); return; }
+  const out = $('talkOut'); out.innerHTML = '<div class="msg ai thinking"><i></i><i></i><i></i></div>';
+  const cats = CAT_NAMES.filter(c => c !== 'No description'), bills = uniqNames([...(S.meta.bills || []).map(b => b.name), ...PRESETS]);
+  try {
+    const res = await aiJSON('talk', {system: AI_RULES, maxTokens: 1500, messages: [{role: 'user', text: `Today is ${todayIso()}. Turn this into money entries. "exp" = money spent, "inc" = money received (salary, refunds, interest), "bill" = something to pay on a due date (PayLater, utilities, loans) — use these bill names when they match: ${bills.join(', ')}. Amounts: "25k" = 25000, "1.5k" = 1500. Dates as YYYY-MM-DD; "yesterday", weekdays and "on the 15th" are relative to today; when no date is given use today (for bills, the due date). For bills paid in installments, "payments" is how many months. Notes: short, readable, Title Case shop names.\nText: ${q}`}],
+      schema: {type: 'ARRAY', items: {type: 'OBJECT', properties: {type: {type: 'STRING', enum: ['exp', 'inc', 'bill']}, amount: {type: 'NUMBER'}, note: {type: 'STRING'}, date: {type: 'STRING'}, category: {type: 'STRING', enum: cats}, payments: {type: 'INTEGER'}}, required: ['type', 'amount', 'note', 'date']}}});
+    talk = (Array.isArray(res) ? res : []).filter(r => r && +r.amount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(r.date)).map(r => ({...r, amount: Math.round(+r.amount * 100) / 100, payments: Math.max(1, Math.min(36, +r.payments || 1)), on: true}));
+    renderTalk();
+  } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+function renderTalk() {
+  const out = $('talkOut'); if (!out) return;
+  if (!talk || !talk.length) { out.innerHTML = '<p class="muted">Couldn’t find amounts in that. Try “grab 550 yesterday”.</p>'; return; }
+  const on = talk.filter(r => r.on);
+  out.innerHTML = `<ul class="list implist">${talk.map((r, k) => { const inc = r.type === 'inc', bill = r.type === 'bill';
+    return `<li><button class="chk ${r.on ? 'on' : ''}" data-act="talk-tog" data-k="${k}" aria-label="${r.on ? 'Skip' : 'Add'} ${esc(r.note)}"><span>${r.on ? '✓' : ''}</span></button>
+      <span class="t">${esc(r.note)}<small>${bill ? `Bill due ${esc(fmtDate(r.date))}${r.payments > 1 ? ` · ${r.payments} payments` : ''}` : `${inc ? 'Income' : esc(r.category || catOf(r.note))} · ${esc(fmtDate(r.date, {month: 'short', day: 'numeric'}))}`}</small></span>
+      <span class="amt ${inc ? 'up' : ''}">${inc ? '+' : '−'}${esc(peso(r.amount, 2))}</span></li>`; }).join('')}</ul>
+    <button class="go" data-act="talk-add" ${on.length ? '' : 'disabled'}>Add ${on.length} entr${on.length === 1 ? 'y' : 'ies'}</button>`;
+}
+function talkAdd() {
+  const pick = (talk || []).filter(r => r.on); if (!pick.length) return;
+  const made = [], keys = new Set(), billsBefore = JSON.parse(JSON.stringify(S.meta.bills || [])); let billMsg = '';
+  for (const r of pick) {
+    if (r.type === 'bill') { const d0 = new Date(dnum(r.date)); const res = putBills(r.note, Array.from({length: r.payments}, (_, k) => ({a: r.amount, due: iso(mkDate(d0.getFullYear(), d0.getMonth() + k, d0.getDate()))}))); res.keys.forEach(k => keys.add(k)); billMsg = res.msg; continue; }
+    const d = new Date(dnum(r.date)), y = String(d.getFullYear()), i = d.getMonth(), t = r.type === 'inc' ? 'inc' : 'exp';
+    const it = {id: uid(), a: r.amount, n: r.note, d: r.date}; if (t === 'exp' && r.category && r.category !== catOf(r.note)) it.c = r.category;
+    ensureYear(y)[i][t].push(it); made.push({y, i, t, it}); keys.add('y' + y);
+  }
+  keys.add('meta'); talk = null; closeSheet(); commit(...keys);
+  toast(`${made.length ? `${made.length} entr${made.length === 1 ? 'y' : 'ies'} added` : ''}${made.length && billMsg ? ' · ' : ''}${billMsg}`, () => { made.forEach(({y, i, t, it}) => { const l = S.years[y][i][t], k = l.indexOf(it); if (k >= 0) l.splice(k, 1); }); S.meta.bills = billsBefore; commit(...keys); });
+}
+
+/* ---- Settings: status and a connection check ---- */
+function aiSettingsHTML() {
+  return `<h2>Pera AI</h2>
+    <p class="muted">Ask Pera, Sort my spending, monthly summaries and Add by talking use Google Gemini through your Supabase project; the key stays on the server. When you use them, a summary of your numbers (and for some questions, recent entries) is sent to Google. On Gemini’s free tier Google may use that to improve its products.</p>
+    <div class="note" id="aiStat">${aiOk === true ? 'Pera AI is working.' : aiOk === false ? 'Pera AI isn’t set up yet: deploy the <b>pera-ai</b> function in Supabase (steps in the project README).' : 'Not checked yet.'}</div>
+    <button class="ghost wide" data-act="ai-check">${SPARK}Check Pera AI</button>`;
+}
+async function aiCheck() {
+  const st = $('aiStat'); if (st) st.textContent = 'Checking…';
+  try { const t = await ai('ping', {messages: [{role: 'user', text: 'Reply with just: OK'}], maxTokens: 20}); if (st) st.textContent = `Pera AI is working (${t.trim().slice(0, 20)}).`; }
+  catch (e) { if (st) st.textContent = e.message; }
 }
 
 /* ================= search: every entry, bill and deposit, by words, amount or category ================= */
@@ -1558,7 +1763,7 @@ let toastTimer;
 // toast(msg, undoFn?, buttonLabel?) — warnings are messages that start with "Couldn" / "Still" / "That" / contain "already"
 function toast(msg, undo, label = 'Undo') {
   const t = $('toast'), b = $('toastBtn'), ms = undo ? 6000 : 3500;
-  const warn = /^(Couldn|Still|That|Not)|already|offline/i.test(msg);
+  const warn = /^(Couldn|Still|That|Not|Pera AI|The AI|Gemini|You’re offline|Sign in)|already|offline|isn’t set up/i.test(msg);
   $('toastMsg').textContent = msg;
   $('toastIc').textContent = warn ? '!' : '✓';
   t.classList.toggle('warn', warn);
@@ -1635,7 +1840,7 @@ function entryForm(o) {
   openSheet(`<div class="sheethead"><h2 id="efTitle">${o.edit ? 'Edit' : 'Add'} ${T[t]}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
     ${o.edit ? '' : `<div class="seg addseg">${[['exp', 'Expense'], ['inc', 'Income'], ['dep', 'Savings'], ['bill', 'Bill']].map(([k, l]) => `<button type="button" data-type="${k}" aria-pressed="${k === t}">${l}</button>`).join('')}</div>`}
     <form id="ef" novalidate>
-      ${o.edit ? '' : `<div data-for="exp inc" class="quick"><label for="fq">Type it</label><input id="fq" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="150 jollibee yesterday"><div class="chips shortcuts" data-for="exp">${frequent('exp').map((f, k) => `<button type="button" class="chip" data-sc="exp" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div><div class="chips shortcuts" data-for="inc">${frequent('inc').map((f, k) => `<button type="button" class="chip" data-sc="inc" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div></div>`}
+      ${o.edit ? '' : `<div data-for="exp inc" class="quick"><div class="fqhead"><label for="fq">Type it</label><button type="button" class="plain aitalk" data-act="talk">${SPARK}Several at once</button></div><input id="fq" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="150 jollibee yesterday"><div class="chips shortcuts" data-for="exp">${frequent('exp').map((f, k) => `<button type="button" class="chip" data-sc="exp" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div><div class="chips shortcuts" data-for="inc">${frequent('inc').map((f, k) => `<button type="button" class="chip" data-sc="inc" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div></div>`}
       <div data-for="dep"><label for="fp">Savings account</label>${ps.length ? `<select id="fp">${ps.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>` : `<p class="note">You don’t have a savings account yet. <button type="button" class="ghost" data-act="pot-new">Add one</button></p>`}</div>
       <div data-for="bill"><label for="fbn">Bill</label><select id="fbn">${billNames.map(n => `<option>${esc(n)}</option>`).join('')}<option value="__other">Other…</option></select><input id="fbo" maxlength="40" placeholder="Name of the bill" hidden style="margin-top:8px"></div>
       <label for="fa">Amount (sums like 1.84+329 work)</label>
@@ -1908,6 +2113,7 @@ function settings() {
     ${syncErr && syncErr.auth ? '<button class="go" data-act="signout">Sign in again</button>' : ''}
     <button class="go" data-act="sync-now">Sync now</button>
     <button class="ghost wide" data-act="change-pw">Change password</button>
+    ${aiSettingsHTML()}
     <h2>Look</h2>
     <label>Theme</label>
     <div class="seg lookseg">${[['system', 'Match phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => `<button data-act="look" data-k="theme" data-v="${k}" aria-pressed="${look().theme === k}">${l}</button>`).join('')}</div>
@@ -2610,6 +2816,17 @@ document.addEventListener('click', e => {
     case 'goal-new': return goalNew();
     case 'report': return reportSheet(d.r);
     case 'search': return searchSheet();
+    case 'ask': return askSheet();
+    case 'ask-q': return askPera(d.q);
+    case 'sort-spend': return sortSpending();
+    case 'sort-tog': { const r = sortSug && sortSug[+d.k]; if (r) { r.on = !r.on; renderSort(); } return; }
+    case 'sort-apply': return applySort();
+    case 'sum-make': return makeSummary();
+    case 'talk': return talkSheet($('fq') ? $('fq').value : '');
+    case 'talk-go': return talkRead();
+    case 'talk-tog': { const r = talk && talk[+d.k]; if (r) { r.on = !r.on; renderTalk(); } return; }
+    case 'talk-add': return talkAdd();
+    case 'ai-check': return aiCheck();
     case 'change-pw': return newPasswordSheet(false);
     case 'sr-f': srch.f = d.k; document.querySelectorAll('[data-act=sr-f]').forEach(b => b.setAttribute('aria-pressed', b.dataset.k === d.k)); return runSearch();
     case 'rep-months': repState.months = +d.n; return reportSheet('trend');

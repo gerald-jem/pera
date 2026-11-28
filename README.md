@@ -15,3 +15,16 @@ A small installable finance tracker (PWA). It runs on GitHub Pages and syncs thr
 6. Optional: Supabase → Authentication → Sign In / Providers → turn off "Allow new users to sign up" once your account exists.
 
 When you change app files, bump `VERSION` in `sw.js` so installed copies update.
+
+## Pera AI (optional)
+
+Ask Pera, Sort my spending, monthly summaries and Add by talking use **Google Gemini** through a small Supabase Edge Function, so the Gemini key never reaches your devices.
+
+1. **Get a Gemini key** — go to [Google AI Studio](https://aistudio.google.com/apikey) → *Create API key*. The free tier is enough. (On the free tier Google may use prompts to improve its products.)
+2. **Add secrets** — Supabase dashboard → *Edge Functions* → *Secrets* → add:
+   - `GEMINI_API_KEY` = your key
+   - `ALLOWED_EMAILS` = the email you sign in to Pera with (so nobody else who signs up can use your quota)
+3. **Deploy the function** — *Edge Functions* → *Deploy a new function* → *Via Editor* → name it **`pera-ai`** → replace the sample code with [`supabase/functions/pera-ai/index.ts`](supabase/functions/pera-ai/index.ts) → *Deploy*. Leave **Verify JWT** on.
+4. In Pera: *Settings* → *Pera AI* → **Check Pera AI**. It should say “Pera AI is working.”
+
+Optional secret `GEMINI_MODEL` picks the model(s), tried in order (default `gemini-3.8-flash,gemini-3.5-flash-lite`).

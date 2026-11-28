@@ -21,6 +21,7 @@ bash tests/run_all.sh
 | test_search_and_day_groups | search, day-grouped month entries, sticky sheet headers |
 | test_accessibility_and_speed | axe-core WCAG checks on every tab, load time on a slow phone |
 | test_password_reset_fonts_a11y | forgot / change password, bundled fonts, axe |
+| test_ai | Ask Pera, Sort my spending, monthly summary, Add by talking, "not set up" and quota messages (AI is a stand-in: `mock_ai.js`) |
 
 `fixtures/` holds **invented** data from `make_fixtures.py`. This repo is public: never put real statements or backups here.
 Most tests print what they saw; screenshots go to `tests/out/`.

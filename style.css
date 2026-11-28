@@ -473,3 +473,26 @@ html,body{touch-action:manipulation}
 .sr{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 main.app{display:block}header.top{display:flex}
 .ghost.wide{width:100%;margin-top:10px;border:1px solid var(--line);border-radius:12px;min-height:46px}
+
+/* ---- Pera AI ---- */
+.iconbtn svg path{fill:none}
+.sparkic svg,.aitalk svg,.go svg,.ghost.wide svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linejoin:round;vertical-align:-3px;margin-right:6px}
+.sparkic{color:var(--blue)}
+.aibar{all:unset;box-sizing:border-box;cursor:pointer;display:grid;grid-template-columns:34px minmax(0,1fr) 12px;gap:10px;align-items:center;width:100%;margin:12px 0 0;padding:12px 14px;border-radius:14px;background:linear-gradient(135deg,color-mix(in srgb,var(--blue) 14%,var(--card)),var(--card));border:1px solid color-mix(in srgb,var(--blue) 25%,var(--line))}
+.aibar .sparkic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:color-mix(in srgb,var(--blue) 18%,transparent)}.aibar .sparkic svg{margin:0}
+.aibar small{display:block;font-size:12px;color:var(--mute);margin-top:2px}.aibar:focus-visible{outline:2px solid var(--blue)}
+.chat{display:flex;flex-direction:column;gap:10px;margin:10px 0;min-height:30vh}
+.msg{max-width:88%;padding:10px 13px;border-radius:16px;font-size:15px;line-height:1.45}.msg p{margin:0 0 6px}.msg p:last-child{margin:0}.msg ul{margin:4px 0;padding-left:18px}
+.msg.me{align-self:flex-end;background:var(--blue);color:var(--on-blue);border-bottom-right-radius:4px}
+.msg.ai{align-self:flex-start;background:var(--card);border-bottom-left-radius:4px}.msg.err{color:var(--red)}
+.thinking{display:flex;gap:5px;padding:14px}.thinking i{width:7px;height:7px;border-radius:50%;background:var(--mute);animation:blink 1s infinite}.thinking i:nth-child(2){animation-delay:.15s}.thinking i:nth-child(3){animation-delay:.3s}
+@keyframes blink{0%,100%{opacity:.25}50%{opacity:1}}
+.aisugg{flex-wrap:wrap;margin-bottom:8px}.aisugg .chip{font-size:13px}
+.chatf{position:sticky;bottom:-18px;display:grid;grid-template-columns:minmax(0,1fr) 52px;gap:8px;background:var(--sheet);padding:10px 0 4px;margin-bottom:-4px}
+.chatf .go{margin:0;padding:0;display:grid;place-items:center}.chatf .go svg{margin:0;width:22px;height:22px}
+.aitext p{margin:6px 0}.aitext ul{margin:6px 0;padding-left:18px}.aitext li{margin:3px 0}.aifoot{font-size:12px;margin-top:8px}
+.hhead h3 .sparkic svg{width:16px;height:16px}
+.fqhead{display:flex;justify-content:space-between;align-items:center}.aitalk{width:auto!important;margin:0!important;padding:0!important;min-height:0!important;font-size:14px;display:inline-flex;align-items:center}
+#talkQ{width:100%;font:inherit;font-size:16px;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);resize:vertical;box-sizing:border-box}
+.sortlist li{display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:8px}
+.sortsel{max-width:46vw;font-size:13px;padding:6px 8px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-left:4px solid var(--c)}
