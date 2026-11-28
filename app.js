@@ -404,7 +404,8 @@ function leftToSpend() {
   const skipped = rows.filter(x => skip.has(cat(x)) && cat(x) !== 'Bills & PayLater').reduce((s, x) => s + +x.a, 0);
   const deps = (S.meta.savings || []).flatMap(p => p.kind === 'td' ? (p.cycles || []).flatMap(c => c.deposits || []) : p.kind === 'mp2' ? (p.deposits || []) : (p.txns || []).filter(x => x.a > 0)).filter(d => d.date >= start && d.date <= t).reduce((s, d) => s + +d.a, 0);
   const saved = skip.has('Transfers') ? 0 : Math.min(deps, tr), spent = rows.reduce((s, x) => s + +x.a, 0) - bills - saved - skipped;
-  const budget = P.cap / 2, left = budget - spent, days = Math.max(1, daysBetween(t, next));
+  const slots = payBySlot(), share = slots ? (+start.slice(8, 10) === 15 ? slots.mid : slots.end) / (slots.mid + slots.end) : 0.5;
+  const budget = P.cap * share, left = budget - spent, days = Math.max(1, daysBetween(t, next));
   // what was counted, for the breakdown
   const byCat = {}; rows.forEach(x => { const c = cat(x); if (c === 'Bills & PayLater' || skip.has(c)) return; byCat[c] = (byCat[c] || 0) + +x.a; });
   if (saved) byCat['Transfers'] = (byCat['Transfers'] || 0) - saved;
@@ -1724,6 +1725,23 @@ function goalOptionLines(saved, spentAvg) {
   return out;
 }
 // the next paydays: pay, the bills paid from it, savings, and what's left to spend — flags tight ones
+// salary actually received on each payday (around the 15th vs the 30th), from the last 6 finished months
+function payBySlot() {
+  const t = today(), mid = [], end = [];
+  for (let k = 1; k <= 6; k++) {
+    const d = new Date(t.getFullYear(), t.getMonth() - k, 1), y = String(d.getFullYear()), i = d.getMonth(), m = (S.years[y] || [])[i]; if (!m) continue;
+    let a = 0, b = 0;
+    m.inc.forEach(x => { if (!x.d || !SALARY_RE.test(x.n || '')) return; const day = +x.d.slice(8, 10), mo = +x.d.slice(5, 7) - 1;
+      if (day >= 10 && day <= 22) a += +x.a; else if (day >= 23 || mo !== i) b += +x.a; });
+    // pay that lands on the 1st–5th belongs to the month before's 30th
+    const nx = new Date(+y, i + 1, 1), nm = (S.years[String(nx.getFullYear())] || [])[nx.getMonth()];
+    if (nm) nm.inc.forEach(x => { if (x.d && SALARY_RE.test(x.n || '') && +x.d.slice(8, 10) <= 5) b += +x.a; });
+    m.inc.forEach(x => { if (x.d && SALARY_RE.test(x.n || '') && +x.d.slice(8, 10) <= 5) b -= +x.a; });
+    if (a > 0) mid.push(a); if (b > 0) end.push(b);
+  }
+  const avg = l => l.length ? l.reduce((s, x) => s + x, 0) / l.length : 0;
+  return mid.length >= 2 && end.length >= 2 ? {mid: avg(mid), end: avg(end)} : null;
+}
 function paydayData(base, target, cap) {
   const t = today(), days = [], un = (S.meta.bills || []).filter(b => !b.paid && b.due);
   for (let k = 0; days.length < 4 && k < 4; k++) {
@@ -1731,21 +1749,19 @@ function paydayData(base, target, cap) {
     [15, Math.min(30, last)].forEach(d => { const dt = new Date(y, m, d); if (dt >= new Date(t.getFullYear(), t.getMonth(), t.getDate()) && days.length < 4) days.push(iso(dt)); });
   }
   if (!days.length || !(base > 0)) return [];
-  const per = base / 2, save = target / 2, usual = cap / 2;
-  return days.map(d => { const bills = un.filter(b => payFrom(b.due) === d), bt = bills.reduce((s, b) => s + +b.a, 0), left = per - save - bt;
-    return {date: d, per, save, bills, bt, left, usual, short: Math.max(0, usual - left), tight: left < usual * 0.75}; });
+  const slots = payBySlot(), both = slots ? slots.mid + slots.end : 0;
+  return days.map(d => {
+    // each payday brings what you usually get on it; savings and the spending budget follow the same share
+    const share = slots ? (+d.slice(8, 10) === 15 ? slots.mid : slots.end) / both : 0.5, per = slots ? (+d.slice(8, 10) === 15 ? slots.mid : slots.end) : base / 2;
+    const save = target * share, usual = cap * share, bills = un.filter(b => payFrom(b.due) === d), bt = bills.reduce((s, b) => s + +b.a, 0), left = per - save - bt;
+    return {date: d, per, save, bills, bt, left, usual, share, short: Math.max(0, usual - left), tight: left < usual * 0.75}; });
 }
 function paydayLines(base, target, cap) {
-  const t = today(), days = [], un = (S.meta.bills || []).filter(b => !b.paid && b.due), r = x => Math.round(x);
-  for (let k = 0; days.length < 4 && k < 4; k++) {
-    const y = t.getFullYear(), m = t.getMonth() + k, last = new Date(y, m + 1, 0).getDate();
-    [15, Math.min(30, last)].forEach(d => { const dt = new Date(y, m, d); if (dt >= new Date(t.getFullYear(), t.getMonth(), t.getDate()) && days.length < 4) days.push(iso(dt)); });
-  }
-  if (!days.length || !(base > 0)) return [];
-  const per = base / 2, save = target / 2, usual = cap / 2;
-  return ['- Next paydays (pay ≈ half the monthly salary; savings = half the target; "left" = what remains to spend until the next payday):',
-    ...days.map(d => { const bills = un.filter(b => payFrom(b.due) === d), bt = bills.reduce((s, b) => s + +b.a, 0), left = per - save - bt;
-      return `  · ${d}: pay ${r(per)} − savings ${r(save)} − bills ${r(bt)}${bills.length ? ` (${bills.map(b => `${b.name} ${(+b.a).toFixed(2)} due ${b.due}`).join(', ')})` : ''} = ${r(left)} left${left < usual * 0.75 ? ` — TIGHT: below the usual ${r(usual)} per pay period; suggest saving less this payday or setting money aside from the payday before` : ''}`; })];
+  const r = x => Math.round(x), pays = paydayData(base, target, cap); if (!pays.length) return [];
+  const sl = payBySlot();
+  return [sl ? `- Their pay is uneven: about ${r(sl.mid)} on the 15th and ${r(sl.end)} on the 30th. Savings and spending budget are split in the same proportion (bigger payday = bigger share).` : '- Each payday ≈ half the monthly salary.',
+    '- Next paydays ("left" = what remains to spend until the next payday):',
+    ...pays.map(x => `  · ${x.date}: pay ${r(x.per)} − savings ${r(x.save)} − bills ${r(x.bt)}${x.bills.length ? ` (${x.bills.map(b => `${b.name} ${(+b.a).toFixed(2)} due ${b.due}`).join(', ')})` : ''} = ${r(x.left)} left${x.tight ? ` — TIGHT: below the usual ${r(x.usual)} for this pay period; suggest saving less this payday or setting money aside from the payday before` : ''}`)];
 }
 const FIN_KNOWLEDGE = `Money know-how to apply (use it with their numbers; name the method in a few words when you use one):
 - How to answer: use the worked-out numbers in the data (never redo the arithmetic, never name the data sections like "planning numbers" — just say "based on your last 6 months"). Answer follow-ups in light of the conversation: if they just asked about a goal, "how much should I save each payday" means for that goal.
@@ -1809,7 +1825,8 @@ function paintChat(thinking) {
       qs = splitFollow(last.text).sugg;
       // they named a target and have no goal for it → offer to save it
       const amt = [...chat].reverse().filter(m => m.role === 'user').slice(0, 2).map(m => amtIn(m.text)).find(Boolean);
-      if (amt && /goal|reach|save|saving|target/i.test(chat.map(m => m.text).join(' ')) && !goals().some(g => Math.abs(+g.target - amt) < 1))
+      const asked = chat.filter(m => m.role === 'user').slice(-2).map(m => m.text).join(' ');
+      if (amt && /goal|reach|save up|saving for|target|ipon/i.test(asked) && !/spend|buy|bili|afford|purchase|is that ok|pwede/i.test(asked) && !goals().some(g => Math.abs(+g.target - amt) < 1))
         extra = `<button class="chip act" data-act="ask-goal" data-a="${amt}">＋ Save ${esc(peso(amt))} as a goal</button>`;
     }
     sg.innerHTML = extra + qs.map(q => `<button class="chip" data-act="ask-q" data-q="${esc(q)}">${esc(q)}</button>`).join('');

@@ -1,12 +1,12 @@
 // Pera service worker: network first, cache as the offline fallback.
 // Bump VERSION whenever app files change.
-const VERSION = 'pera-v73';
+const VERSION = 'pera-v74';
 // big files that rarely change (screenshot + PDF readers, fonts, Supabase): kept across app updates.
 // Bump VENDOR only when something in vendor/ changes.
 const VENDOR = 'pera-vendor-1';
 const SHARE = 'pera-share';
 const REMIND = 'pera-remind';   // upcoming reminders written by the app, plus which ones were already shown   // screenshots shared into Pera from other apps, until the app picks them up
-const SHELL = ['./', 'index.html', 'style.css?v=73', 'money.js?v=73', 'app.js?v=73', 'config.js?v=73',
+const SHELL = ['./', 'index.html', 'style.css?v=74', 'money.js?v=74', 'app.js?v=74', 'config.js?v=74',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
