@@ -4,7 +4,7 @@ window.supabase = { createClient: () => {
   const sel = () => { const q = {keys: null, in(_c, k) { q.keys = k; return q; }, then(res, rej) { return window.dbOp('select', q.keys).then(rows => ({data: rows, error: null})).then(res, rej); }}; return q; };
   return {
     auth: { onAuthStateChange: f => { cb = f; setTimeout(() => f('INITIAL_SESSION', session), 30); return {data:{subscription:{unsubscribe(){}}}}; },
-            signOut: async () => { cb('SIGNED_OUT', null); return {}; }, signInWithPassword: async () => ({data:{session}}), signUp: async () => ({data:{session:null}}) },
+            getSession: async () => ({data: {session: {access_token: 'test-token', user: session.user}}}), signOut: async () => { cb('SIGNED_OUT', null); return {}; }, signInWithPassword: async () => ({data:{session}}), signUp: async () => ({data:{session:null}}) },
     functions: {invoke: (n, o) => window.__mockInvoke ? window.__mockInvoke(n, o) : Promise.resolve({data: null, error: {message: 'not mocked', context: new Response('{}', {status: 404})}})},
     from: () => ({
       select: () => sel(),

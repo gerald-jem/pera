@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
   const key = Deno.env.get('GEMINI_API_KEY');
   if (!key) return reply({error: 'Pera AI isn’t set up: add the GEMINI_API_KEY secret in Supabase'}, 500);
 
-  let body: {system?: string; messages?: {role: string; text: string}[]; json?: boolean; schema?: unknown; maxTokens?: number};
+  let body: {system?: string; messages?: {role: string; text: string}[]; json?: boolean; schema?: unknown; maxTokens?: number; stream?: boolean; think?: string};
   try { body = await req.json(); } catch { return reply({error: 'Bad request'}, 400); }
   if (JSON.stringify(body).length > 600_000) return reply({error: 'Too much data in one request'}, 413);
 
@@ -44,14 +44,60 @@ Deno.serve(async (req) => {
       temperature: 0.3,
       maxOutputTokens: Math.min(Number(body.maxTokens) || 1500, 6000),
       ...(body.json ? {responseMimeType: 'application/json', ...(body.schema ? {responseSchema: body.schema} : {})} : {}),
-    },
+      // Gemini 3 thinks a lot by default; quick money questions don't need it ("low" unless the app asks otherwise)
+      thinkingConfig: {thinkingLevel: ['minimal', 'low', 'medium', 'high'].includes(String(body.think)) ? body.think : 'low'},
+    } as Record<string, unknown>,
+  };
+  const call = (model: string, stream: boolean) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:${stream ? 'streamGenerateContent?alt=sse' : 'generateContent'}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', 'x-goog-api-key': key}, body: JSON.stringify(payload),
+  });
+  // an older model that doesn't know thinkingLevel: drop it and ask again
+  const send = async (model: string, stream: boolean) => {
+    let r = await call(model, stream);
+    if (r.status === 400) {
+      const t = await r.clone().text();
+      if (/thinking/i.test(t)) { delete (payload.generationConfig as Record<string, unknown>).thinkingConfig; r = await call(model, stream); }
+    }
+    return r;
   };
 
   let last = 'no answer';
+  // streaming: send the answer's text as it is written, so the app can show it word by word
+  if (body.stream && !body.json) {
+    for (const model of MODELS) {
+      const r = await send(model, true);
+      if (!r.ok || !r.body) {
+        const d = await r.json().catch(() => ({}));
+        last = d?.error?.message || `HTTP ${r.status}`;
+        if (![404, 429, 500, 503].includes(r.status)) break;
+        continue;
+      }
+      const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+      const out = new ReadableStream({
+        async start(ctrl) {
+          const enc = new TextEncoder(); let buf = '';
+          try {
+            for (;;) {
+              const {value, done} = await reader.read(); if (done) break;
+              buf += value; const lines = buf.split('\n'); buf = lines.pop() || '';
+              for (const line of lines) {
+                if (!line.startsWith('data:')) continue;
+                try {
+                  const d = JSON.parse(line.slice(5));
+                  const text = (d?.candidates?.[0]?.content?.parts || []).filter((p: {thought?: boolean}) => !p.thought).map((p: {text?: string}) => p.text || '').join('');
+                  if (text) ctrl.enqueue(enc.encode(text));
+                } catch { /* partial line */ }
+              }
+            }
+          } finally { ctrl.close(); }
+        },
+      });
+      return new Response(out, {headers: {...CORS, 'Content-Type': 'text/plain; charset=utf-8', 'X-Pera-Model': model, 'Access-Control-Expose-Headers': 'X-Pera-Model'}});
+    }
+    return reply({error: `Gemini: ${last}`}, 502);
+  }
   for (const model of MODELS) {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST', headers: {'Content-Type': 'application/json', 'x-goog-api-key': key}, body: JSON.stringify(payload),
-    });
+    const r = await send(model, false);
     const d = await r.json().catch(() => ({}));
     if (r.ok) {
       const parts = d?.candidates?.[0]?.content?.parts || [];

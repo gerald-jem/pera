@@ -496,3 +496,9 @@ main.app{display:block}header.top{display:flex}
 #talkQ{width:100%;font:inherit;font-size:16px;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);resize:vertical;box-sizing:border-box}
 .sortlist li{display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:8px}
 .sortsel{max-width:46vw;font-size:13px;padding:6px 8px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-left:4px solid var(--c)}
+
+.aicard{margin:12px 0}.card.aicard{padding:16px}
+.aitext.faded{opacity:.35;transition:opacity .2s}
+.aiwriting{display:inline-flex;align-items:center;gap:6px;font-size:14px;color:var(--blue);font-weight:500}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in srgb,var(--blue) 30%,transparent);border-top-color:var(--blue);animation:spin .8s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}

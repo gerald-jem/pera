@@ -370,7 +370,7 @@ function homeNotes(cur, ser) {
   // 2. bills already sitting in next month
   const nd = new Date(+cur.y, cur.i + 1, 1), ny = String(nd.getFullYear()), ni = nd.getMonth();
   const nb = S.years[ny] ? billsIn(ny, ni) : [], nbt = nb.reduce((s, b) => s + +b.a, 0);
-  if (nbt > 0) notes.push({ic: '⏷', cls: '', act: `data-act="goto-month" data-y="${ny}" data-i="${ni}"`, h: `${esc(peso(nbt))} of bills already counted for ${M[ni]}`, s: `${nb.length} payment${nb.length === 1 ? '' : 's'} · plan next month’s spending around it`});
+  if (nbt > 0) notes.push({ic: '↓', cls: '', act: `data-act="goto-month" data-y="${ny}" data-i="${ni}"`, h: `${esc(peso(nbt))} of bills already counted for ${M[ni]}`, s: `${nb.length} payment${nb.length === 1 ? '' : 's'} · plan next month’s spending around it`});
   // 3. spending without a note can't be sorted
   const rows = spendingIn([{y: cur.y, i: cur.i}]), nod = rows.filter(r => r.cat === 'No description').reduce((s, r) => s + r.a, 0), all = rows.reduce((s, r) => s + r.a, 0);
   if (all > 0 && nod / all > 0.25) notes.push({ic: '✎', cls: '', act: `data-act="goto-month" data-y="${esc(cur.y)}" data-i="${cur.i}"`, h: `${Math.round(nod / all * 100)}% of this month’s spending has no note`, s: 'Add a short note so Insights can sort it'});
@@ -482,6 +482,7 @@ function renderBills() {
   const b = (S.meta.bills || []).map((x, j) => ({...x, j})).sort((p, q) => (p.paid - q.paid) || p.due.localeCompare(q.due));
   $('billList').innerHTML = b.map(x => billRow(x, now)).join('') || '<li class="empty">No bills yet. Type one above.</li>';
   billTotals(now);
+  const ba = $('billAI'); if (ba) ba.innerHTML = (S.meta.bills || []).some(b => !b.paid) ? aiCardHTML('bills', 'card') : '';
   fillPicker();
   // your own bills first, then the common ones
   const used = uniqNames((S.meta.bills || []).slice().reverse().map(x => x.name));
@@ -775,6 +776,7 @@ function renderSavings() {
   w.innerHTML = `<div class="savtotal"><div class="muted">In savings now</div><div class="big" style="font-size:clamp(34px,10vw,44px)" data-count="sav" data-n="${total}" data-d="2">${esc(peso(total, 2))}</div>
       <p class="muted">Deposits here show as each month’s <b>Saved</b> in Months, but aren’t subtracted from total money — the transfer already shows as money out in your imported statement.</p></div>
     ${goalsHTML()}
+    ${pots().length || goals().length ? aiCardHTML('savings', 'card') : ''}
     <h2 class="sech">Accounts</h2>
     <div class="potgrid">${ps.map(card).join('') || '<p class="empty">No savings yet. Add your Maya time deposit, MP2 or a savings account, or import the Maya file from your spreadsheet in Settings.</p>'}</div>
     <button class="go" data-act="pot-new">Add savings</button>
@@ -1347,6 +1349,39 @@ function renderInsights(ser) {
 const AI_MS = 60000;
 let aiOk = store.get('pera:aiOk');   // null = unknown, true = worked before, false = not set up
 const SPARK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
+function aiError(msg, status) {
+  if (/exhausted|quota|rate limit|429/i.test(msg)) return 'Gemini’s free limit is used up for now. Try again in a minute, or tomorrow if it’s the daily limit.';
+  if (status === 404 || /requested function was not found|function not found/i.test(msg)) { aiOk = false; store.set('pera:aiOk', false); return 'Pera AI isn’t set up yet. See Settings → Pera AI.'; }
+  return msg;
+}
+// streamed answer: calls onText(textSoFar) as words arrive; works with the older non-streaming function too
+async function aiStream(task, payload, onText) {
+  if (!sb || !user) throw new Error('Sign in first.');
+  if (!navigator.onLine) throw new Error('You’re offline. Pera AI needs the internet.');
+  const {data: {session}} = await sb.auth.getSession();
+  if (!session) throw new Error('Sign in first.');
+  const ctl = new AbortController(); let timer = setTimeout(() => ctl.abort(), 45000);   // first words within 45 s
+  let r;
+  try {
+    r = await fetch(`${cfg.supabaseUrl}/functions/v1/pera-ai`, {method: 'POST', signal: ctl.signal,
+      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}`, apikey: cfg.supabaseAnonKey},
+      body: JSON.stringify({task, stream: true, ...payload})});
+  } catch (e) { clearTimeout(timer); throw new Error(e.name === 'AbortError' ? 'The AI took too long. Try again.' : 'Couldn’t reach Pera AI. Check your connection.'); }
+  if (!r.ok) { clearTimeout(timer); let msg = `Pera AI error (${r.status})`; try { const j = await r.json(); msg = j.error || j.message || msg; } catch {} throw new Error(aiError(msg, r.status)); }
+  if (/json/i.test(r.headers.get('content-type') || '')) { clearTimeout(timer); const j = await r.json(); if (j.error) throw new Error(aiError(j.error)); aiOk = true; store.set('pera:aiOk', true); onText(j.text || ''); return j.text || ''; }
+  const reader = r.body.getReader(), dec = new TextDecoder(); let text = '';
+  try {
+    for (;;) {
+      const {value, done} = await reader.read(); if (done) break;
+      clearTimeout(timer); timer = setTimeout(() => ctl.abort(), 30000);   // keep going while words keep coming
+      text += dec.decode(value, {stream: true}); onText(text);
+    }
+  } catch (e) { if (!text) throw new Error('The AI took too long. Try again.'); }
+  finally { clearTimeout(timer); }
+  if (!text.trim()) throw new Error('The AI didn’t answer. Try again.');
+  aiOk = true; store.set('pera:aiOk', true);
+  return text;
+}
 async function ai(task, payload) {
   if (!sb || !user) throw new Error('Sign in first.');
   if (!navigator.onLine) throw new Error('You’re offline. Pera AI needs the internet.');
@@ -1358,9 +1393,7 @@ async function ai(task, payload) {
     let msg = error.message || 'Pera AI didn’t answer.';
     const status = error.context && error.context.status;
     try { const j = await error.context.json(); if (j && (j.error || j.message)) msg = j.error || j.message; } catch {}
-    if (/exhausted|quota|rate limit|429/i.test(msg)) msg = 'Gemini’s free limit is used up for now. Try again in a minute, or tomorrow if it’s the daily limit.';
-    if (status === 404 || /requested function was not found|function not found/i.test(msg)) { aiOk = false; store.set('pera:aiOk', false); msg = 'Pera AI isn’t set up yet. See Settings → Pera AI.'; }
-    throw new Error(msg);
+    throw new Error(aiError(msg, status));
   }
   if (data && data.error) throw new Error(data.error);
   aiOk = true; store.set('pera:aiOk', true);
@@ -1400,7 +1433,7 @@ function aiContext(opts = {}) {
   }
   return L.join('\n');
 }
-const AI_RULES = 'You are Pera, a friendly money helper inside a personal finance app for someone in the Philippines. Use only the data given; when it doesn’t cover something, say so plainly. Show peso amounts like ₱1,234. Be brief and concrete: lead with the answer, then a few short lines or bullets. "No description" means spending recorded without a note, mostly from an old spreadsheet. You are not a licensed financial adviser: for investment, tax or legal decisions give general information and suggest checking with a professional.';
+const AI_RULES = 'You are Pera, a friendly money helper inside a personal finance app for someone in the Philippines. Use only the data given; when it doesn’t cover something, say so plainly. Show peso amounts like ₱1,234. Be brief and concrete: lead with the answer, then a few short lines or bullets. "No description" means spending recorded without a note, mostly from an old spreadsheet. Only when the person asks about investing, taxes or legal matters, give general information and suggest checking with a licensed professional; never add that note otherwise.';
 
 /* ---- Ask Pera: chat about your money ---- */
 let chat = [];
@@ -1421,11 +1454,14 @@ function paintChat(thinking) {
 }
 async function askPera(q) {
   chat.push({role: 'user', text: q}); paintChat(true);
-  const needRows = /\b(spent|spend|bought|paid|grab|jollibee|shopee|lazada|food|transaction|entry|entries|where|which|list|biggest|most)\b/i.test(q);
+  const needRows = /\b(spent|spend|spending|bought|paid|grab|jollibee|shopee|lazada|food|transaction|entry|entries|where|which|list|biggest|most|cut|save|saving|savings|improve)/i.test(q);
+  const msgs = chat.filter(m => !m.err).slice(-12).map(m => ({role: m.role, text: m.text})), live = {role: 'model', text: ''};
   try {
-    const text = await ai('ask', {system: AI_RULES + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: chat.filter(m => !m.err).slice(-12).map(m => ({role: m.role, text: m.text})), maxTokens: 900});
-    chat.push({role: 'model', text});
-  } catch (e) { chat.push({role: 'model', text: e.message, err: true}); }
+    await aiStream('ask', {system: AI_RULES + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: msgs, maxTokens: 1200, think: 'low'}, t => {
+      if (!chat.includes(live)) chat.push(live);
+      live.text = t; paintChat();
+    });
+  } catch (e) { if (chat.includes(live) && live.text) live.text += '\n\n(cut off — try again)'; else chat.push({role: 'model', text: e.message, err: true}); }
   paintChat();
 }
 
@@ -1440,7 +1476,7 @@ async function sortSpending() {
   if (!notes.length) return;
   const cats = CAT_NAMES.filter(c => c !== 'No description');
   try {
-    const res = await aiJSON('sort', {system: AI_RULES, maxTokens: 4000,
+    const res = await aiJSON('sort', {system: AI_RULES, maxTokens: 4000, think: 'low',
       messages: [{role: 'user', text: `Put each Philippine bank/e-wallet transaction note into one category: ${cats.join(', ')}. Use "Transfers" for moving money to the person's own accounts or other people (InstaPay/PESONet sends, "Sent to", "Transfer to"). Use "Other" only when nothing fits. Also give a short clean shop/payee name.\nNotes:\n${notes.map((n, k) => `${k + 1}. ${n}`).join('\n')}`}],
       schema: {type: 'ARRAY', items: {type: 'OBJECT', properties: {n: {type: 'INTEGER'}, category: {type: 'STRING', enum: cats}, name: {type: 'STRING'}}, required: ['n', 'category']}}});
     sortSug = (Array.isArray(res) ? res : []).map(r => ({note: notes[r.n - 1], c: cats.includes(r.category) ? r.category : 'Other', name: r.name || '', on: r.category !== 'Other'})).filter(r => r.note);
@@ -1470,25 +1506,51 @@ function applySort() {
   toast(`${pick.length} categor${pick.length === 1 ? 'y' : 'ies'} applied`, () => { S.meta.catRules = before.rules; touched.forEach(x => delete x.c); commit(...keys); });
 }
 
-/* ---- Monthly summary: a short recap in plain words (kept on this device per month) ---- */
+/* ---- AI cards: short write-ups on Home, each month, Savings and Bills (kept on this device) ---- */
 function summaryMonth() { const t = today(); return t.getDate() >= 25 ? {y: String(t.getFullYear()), i: t.getMonth()} : (d => ({y: String(d.getFullYear()), i: d.getMonth()}))(new Date(t.getFullYear(), t.getMonth() - 1, 1)); }
+const ym = () => { const t = today(); return `${t.getFullYear()}-${t.getMonth()}`; };
+const NO_FLUFF = 'Friendly, no headings, no greeting, no disclaimers, no advice to see a professional.';
+function aiSpec(id) {
+  const [kind, y, i] = String(id).split('|');
+  if (kind === 'month') return {id, key: `sum:${y}-${i}`, title: `${M[+i]} in words`, intro: `A short recap of ${M[+i]}: what changed, and one or two things to try.`,
+    prompt: () => `Data:\n${aiContext()}\n\nWrite a recap of ${M[+i]} ${y} in under 110 words. Three short parts: one line on how the month went (income, spending, what was kept); 2–3 bullets on the biggest changes against their usual months, with peso amounts; then one or two specific, doable tips. ${NO_FLUFF}`};
+  if (kind === 'savings') return {id, key: `sav:${ym()}`, title: 'Savings check-in', intro: 'Where your savings and goals stand, whether your pace gets you there, and what to do next.',
+    prompt: () => `Data:\n${aiContext()}\n\nWrite a savings check-in in under 110 words: one line on total savings now and how it grew; a bullet per goal (or per account if there are no goals) saying if the current pace reaches it on time, with peso amounts; then one concrete next step, like how much to move on each payday (15th and 30th). ${NO_FLUFF}`};
+  if (kind === 'bills') return {id, key: `bills:${ym()}`, title: 'Bills plan', intro: 'What your upcoming bills mean for each payday, and when you’ll be clear of them.',
+    prompt: () => `Data:\n${aiContext()}\n\nWrite a bills plan in under 110 words: total still owed and when the last one ends; bullets for the heaviest upcoming month(s) with how much to set aside from each payday (15th and 30th) to cover them; then one tip to get clear sooner or avoid piling up more PayLater. ${NO_FLUFF}`};
+  return null;
+}
+const aiWriting = {};   // key → {text} while a card is being written
+const aiSaved = key => store.get('pera:ai:' + key) || (key.startsWith('sum:') ? store.get('pera:' + key) : null);
+function aiCardHTML(id, extraClass = 'hcard') {
+  const sp = aiSpec(id); if (!sp) return '';
+  const saved = aiSaved(sp.key), w = aiWriting[sp.key], dots = '<div class="msg ai thinking" aria-label="Writing"><i></i><i></i><i></i></div>';
+  const btn = w ? `<span class="aiwriting"><span class="spin" aria-hidden="true"></span>Writing…</span>` : saved ? `<button class="plain" data-act="ai-card" data-id="${esc(id)}">Rewrite</button>` : '';
+  const body = w ? (w.text ? `<div class="aitext">${aiHTML(w.text)}</div>` : `${saved ? `<div class="aitext faded">${aiHTML(saved.text)}</div>` : ''}${dots}`) + '<p class="muted aifoot">Writing a fresh one…</p>'
+    : saved ? `<div class="aitext">${aiHTML(saved.text)}</div><p class="muted aifoot">Written by AI ${esc(new Date(saved.at).toLocaleDateString('en-PH', {month: 'short', day: 'numeric'}))} · double-check the numbers</p>`
+    : `<p class="muted">${sp.intro} Uses Google Gemini.</p><button class="ghost wide" data-act="ai-card" data-id="${esc(id)}">${SPARK}Write it</button>`;
+  return `<section class="${extraClass} aicard" data-aikey="${esc(sp.key)}" data-aiid="${esc(id)}" aria-busy="${!!w}"><div class="hhead"><h3><span class="sparkic">${SPARK}</span>${esc(sp.title)}</h3>${btn}</div>${body}</section>`;
+}
+function paintAiCards(key) {
+  document.querySelectorAll(`[data-aikey="${CSS.escape(key)}"]`).forEach(el => {
+    const cls = el.classList.contains('hcard') ? 'hcard' : 'card', id = el.id;
+    el.outerHTML = aiCardHTML(el.dataset.aiid, cls).replace('<section ', id ? `<section id="${id}" ` : '<section ');
+  });
+}
+async function writeAiCard(id) {
+  const sp = aiSpec(id); if (!sp || aiWriting[sp.key]) return;
+  aiWriting[sp.key] = {text: ''}; paintAiCards(sp.key);
+  const had = !!aiSaved(sp.key);
+  try {
+    const text = await aiStream('card', {system: AI_RULES, maxTokens: 900, think: 'low', messages: [{role: 'user', text: sp.prompt()}]}, t => { aiWriting[sp.key].text = t; paintAiCards(sp.key); });
+    store.set('pera:ai:' + sp.key, {text, at: Date.now()});
+    delete aiWriting[sp.key]; paintAiCards(sp.key); toast(had ? `${sp.title} rewritten` : `${sp.title} written`);
+  } catch (e) { delete aiWriting[sp.key]; paintAiCards(sp.key); toast(e.message); }
+}
 function homeSummary() {
   const box = $('hSum'); if (!box) return;
   const m = summaryMonth(); if (!S.years[m.y]) { box.hidden = true; return; }
-  const saved = store.get(`pera:sum:${m.y}-${m.i}`);
-  box.hidden = false;
-  box.innerHTML = `<div class="hhead"><h3><span class="sparkic">${SPARK}</span>${M[m.i]} in words</h3>${saved ? '<button class="plain" data-act="sum-make">Rewrite</button>' : ''}</div>
-    ${saved ? `<div class="aitext">${aiHTML(saved.text)}</div><p class="muted aifoot">Written by AI ${esc(new Date(saved.at).toLocaleDateString('en-PH', {month: 'short', day: 'numeric'}))} · check the numbers in Months</p>`
-      : `<p class="muted">A short recap of ${M[m.i]}: what changed, and one or two things to try. Uses Google Gemini.</p><button class="ghost wide" data-act="sum-make">${SPARK}Write my summary</button>`}`;
-}
-async function makeSummary() {
-  const m = summaryMonth(), box = $('hSum'); if (!box) return;
-  box.querySelectorAll('button').forEach(b => { b.disabled = true; }); box.insertAdjacentHTML('beforeend', '<div class="msg ai thinking"><i></i><i></i><i></i></div>');
-  try {
-    const text = await ai('summary', {system: AI_RULES, maxTokens: 700, messages: [{role: 'user', text: `Data:\n${aiContext()}\n\nWrite a recap of ${M[m.i]} ${m.y} in under 110 words for the person. Three short parts: one line on how the month went overall (income, spending, what was kept); 2–3 bullets on the biggest changes against their usual months, with peso amounts; then one or two specific, doable tips based on the numbers. Friendly, no headings, no greeting.`}]});
-    store.set(`pera:sum:${m.y}-${m.i}`, {text, at: Date.now()});
-  } catch (e) { toast(e.message); }
-  homeSummary();
+  box.hidden = false; box.outerHTML = aiCardHTML(`month|${m.y}|${m.i}`).replace('<section ', '<section id="hSum" ');
 }
 
 /* ---- Add by talking: several entries from one sentence ---- */
@@ -1505,7 +1567,7 @@ async function talkRead() {
   const out = $('talkOut'); out.innerHTML = '<div class="msg ai thinking"><i></i><i></i><i></i></div>';
   const cats = CAT_NAMES.filter(c => c !== 'No description'), bills = uniqNames([...(S.meta.bills || []).map(b => b.name), ...PRESETS]);
   try {
-    const res = await aiJSON('talk', {system: AI_RULES, maxTokens: 1500, messages: [{role: 'user', text: `Today is ${todayIso()}. Turn this into money entries. "exp" = money spent, "inc" = money received (salary, refunds, interest), "bill" = something to pay on a due date (PayLater, utilities, loans) — use these bill names when they match: ${bills.join(', ')}. Amounts: "25k" = 25000, "1.5k" = 1500. Dates as YYYY-MM-DD; "yesterday", weekdays and "on the 15th" are relative to today; when no date is given use today (for bills, the due date). For bills paid in installments, "payments" is how many months. Notes: short, readable, Title Case shop names.\nText: ${q}`}],
+    const res = await aiJSON('talk', {system: AI_RULES, maxTokens: 1500, think: 'low', messages: [{role: 'user', text: `Today is ${todayIso()}. Turn this into money entries. "exp" = money spent, "inc" = money received (salary, refunds, interest), "bill" = something to pay on a due date (PayLater, utilities, loans) — use these bill names when they match: ${bills.join(', ')}. Amounts: "25k" = 25000, "1.5k" = 1500. Dates as YYYY-MM-DD; "yesterday", weekdays and "on the 15th" are relative to today; when no date is given use today (for bills, the due date). For bills paid in installments, "payments" is how many months. Notes: short, readable, Title Case shop names.\nText: ${q}`}],
       schema: {type: 'ARRAY', items: {type: 'OBJECT', properties: {type: {type: 'STRING', enum: ['exp', 'inc', 'bill']}, amount: {type: 'NUMBER'}, note: {type: 'STRING'}, date: {type: 'STRING'}, category: {type: 'STRING', enum: cats}, payments: {type: 'INTEGER'}}, required: ['type', 'amount', 'note', 'date']}}});
     talk = (Array.isArray(res) ? res : []).filter(r => r && +r.amount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(r.date)).map(r => ({...r, amount: Math.round(+r.amount * 100) / 100, payments: Math.max(1, Math.min(36, +r.payments || 1)), on: true}));
     renderTalk();
@@ -1543,7 +1605,7 @@ function aiSettingsHTML() {
 }
 async function aiCheck() {
   const st = $('aiStat'); if (st) st.textContent = 'Checking…';
-  try { const t = await ai('ping', {messages: [{role: 'user', text: 'Reply with just: OK'}], maxTokens: 20}); if (st) st.textContent = `Pera AI is working (${t.trim().slice(0, 20)}).`; }
+  try { const t = await ai('ping', {messages: [{role: 'user', text: 'Reply with just: OK'}], maxTokens: 50, think: 'minimal'}); if (st) st.textContent = `Pera AI is working (${t.trim().slice(0, 20)}).`; }
   catch (e) { if (st) st.textContent = e.message; }
 }
 
@@ -1584,7 +1646,7 @@ function runSearch() {
 }
 
 /* ================= more reports (each in its own sheet) ================= */
-const REPORTS = [['trend', 'Spending trend', '▥'], ['cal', 'Spending calendar', '▦'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '⏷']];
+const REPORTS = [['trend', 'Spending trend', '≡'], ['cal', 'Spending calendar', '#'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '↓']];
 let repState = {months: 6, cal: null};
 const lastMonths = n => { const t = today(), out = []; for (let k = n - 1; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); if (S.years[d.getFullYear()]) out.push({y: String(d.getFullYear()), i: d.getMonth()}); } return out; };
 const niceUp = v => { if (v <= 0) return 1; const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e; };
@@ -1977,6 +2039,7 @@ function monthHTML(y, i, ser) {
   return `<div class="sheethead"><h2>${M[i]} ${esc(y)}</h2><button class="ghost" data-act="add-in-month" data-y="${esc(y)}" data-i="${i}">+ Add</button></div>
     <div class="trio"><div class="tile"><span>Income</span><b class="up">${esc(peso(p.inc))}</b></div><div class="tile"><span>Spent</span><b class="dn">${esc(peso(p.exp))}</b></div><div class="tile"><span>Saved</span><b>${esc(peso(p.sav))}</b></div></div>
     <p class="muted">Total money at month end: <b style="color:var(--ink)">${esc(peso(p.total, 2))}</b></p>
+    ${(S.years[y][i].inc.length || S.years[y][i].exp.length) ? aiCardHTML(`month|${y}|${i}`, 'card') : ''}
     <ul class="list">${entryRows(y, i) || '<li class="empty">No entries.</li>'}</ul>
     <button class="plain" data-act="add-dep-month" data-y="${esc(y)}" data-i="${i}">+ Add to savings</button>
     ${(S.years[y][i].inc.length || S.years[y][i].exp.length || +S.years[y][i].sav) ? `<button class="danger" data-act="month-clear" data-y="${esc(y)}" data-i="${i}">Clear ${M[i]}</button>` : ''}`;
@@ -2821,7 +2884,7 @@ document.addEventListener('click', e => {
     case 'sort-spend': return sortSpending();
     case 'sort-tog': { const r = sortSug && sortSug[+d.k]; if (r) { r.on = !r.on; renderSort(); } return; }
     case 'sort-apply': return applySort();
-    case 'sum-make': return makeSummary();
+    case 'ai-card': return writeAiCard(d.id);
     case 'talk': return talkSheet($('fq') ? $('fq').value : '');
     case 'talk-go': return talkRead();
     case 'talk-tog': { const r = talk && talk[+d.k]; if (r) { r.on = !r.on; renderTalk(); } return; }
