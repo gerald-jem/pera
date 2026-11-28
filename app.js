@@ -1549,6 +1549,7 @@ function aiContext(opts = {}) {
   const ps = pots(); if (ps.length) L.push(`Savings accounts: ${ps.map(p => `${p.name} (${p.kind === 'td' ? 'time deposit' : p.kind === 'mp2' ? 'Pag-IBIG MP2' : 'savings account'}) ${Math.round(potNow(p))} now, ${(netRate(p) * 100).toFixed(2)}%/yr after tax`).join('; ')}`);
   const gs = goals(); if (gs.length) L.push(`Goals: ${gs.map(g => { const c = goalCalc(g); return `${g.name}: ${Math.round(c.cur)} of ${Math.round(c.target)}${g.by ? `, wants it by ${g.by} (needs ${Math.round(c.need || 0)}/month)` : ''}`; }).join('; ')}`);
   const h = habits(); if (h.n) L.push(`Last ${h.n} finished months on average: saved ${Math.round(h.save)}/month, left over after spending and saving ${Math.round(h.left)}/month.`);
+  L.push(...planningLines(ser));
   if (opts.entries) {
     L.push('Individual entries, newest first (date | type | note | amount | category):'); let n = 0;
     outer: for (const m of lastMonths(opts.months || 4).reverse()) { const mo = S.years[m.y][m.i];
@@ -1557,7 +1558,35 @@ function aiContext(opts = {}) {
   }
   return L.join('\n');
 }
-const AI_RULES = 'You are Pera, a friendly money helper inside a personal finance app for someone in the Philippines. Use only the data given; when it doesn’t cover something, say so plainly. Show peso amounts like ₱1,234. Be brief and concrete: lead with the answer, then a few short lines or bullets. "No description" means spending recorded without a note, mostly from an old spreadsheet. Only when the person asks about investing, taxes or legal matters, give general information and suggest checking with a licensed professional; never add that note otherwise.';
+// money know-how the AI applies to the person's numbers (rules of thumb, plus Philippine facts with dates — check these when they change)
+// worked out here so the AI explains numbers instead of doing arithmetic
+function planningLines(ser) {
+  const past = ser.filter(p => p.past && !p.now && (p.inc || p.exp)).slice(-6); if (past.length < 2) return [];
+  const avg = k => past.reduce((s, p) => s + p[k], 0) / past.length, inc = avg('inc'), spent = avg('spent'), saved = avg('sav');
+  const f = flowData(6), t = today();
+  const billsAhead = [1, 2, 3].map(n => { const d = new Date(t.getFullYear(), t.getMonth() + n, 1); return billsIn(String(d.getFullYear()), d.getMonth()).reduce((s, b) => s + +b.a, 0); });
+  const billsAvg = billsAhead.reduce((a, b) => a + b, 0) / 3, target = Math.max(inc * 0.2, saved), cap = Math.max(0, inc - target - billsAvg);
+  const liquid = pots().filter(p => p.kind !== 'mp2').reduce((s, p) => s + potNow(p), 0), locked = pots().filter(p => p.kind === 'mp2').reduce((s, p) => s + potNow(p), 0);
+  const ess = spent;   // usual spending: many entries have no note or leave as transfers, so a category-based 'essentials' figure would be too low
+  const r = x => Math.round(x);
+  return [`Pera's planning numbers (exact, use as is; averages of the last ${past.length} finished months):`,
+    `- Take-home income ${r(inc)}/month${f.useSal ? ` (salary ${r(f.aIn)})` : ''}; spent ${r(spent)}/month (incl. bills, not savings); saved ${r(saved)}/month = ${inc ? Math.round(saved / inc * 100) : 0}% of income.`,
+    `- Bills already scheduled, next 3 months: ${billsAhead.map(r).join(', ')} (avg ${r(billsAvg)}/month).`,
+    `- Suggested savings target: ${r(target)}/month (the higher of 20% of income or what they already save) = ${r(target / 2)} each payday.`,
+    `- Suggested monthly spending cap, not counting scheduled bills: ${r(cap)} (income ${r(inc)} − savings ${r(target)} − bills ${r(billsAvg)}); about ${r(cap / 2)} per pay period, ${r(cap / 30)}/day.`,
+    `- 50/30/20 of income: needs ${r(inc * .5)}, wants ${r(inc * .3)}, savings ${r(inc * .2)}.`,
+    `- Emergency fund: ${r(liquid)} in withdrawable savings (plus ${r(locked)} locked in MP2) covers ${ess > 0 ? (liquid / ess).toFixed(1) : '?'} months of their usual spending (${r(ess)}/month).`];
+}
+const FIN_KNOWLEDGE = `Money know-how to apply (use it with their numbers; name the method in a few words when you use one):
+- Spending cap / budget: never answer that none is set. Use "Pera's planning numbers": suggest the cap given there and explain it in one line (income minus savings target minus bills). Offer the 50/30/20 split (needs/wants/savings of take-home pay) as a cross-check, and pay-yourself-first: move savings on payday (15th and 30th) before spending.
+- Savings rate: 20% of take-home is a common floor; 30%+ is strong. Compare with their actual rate.
+- Emergency fund: 3–6 months of usual spending (6+ if income is irregular or one income supports others), kept somewhere withdrawable (savings account, time deposit that allows early withdrawal). MP2 is locked for 5 years, so it doesn't count.
+- Debt and PayLater: pay the full statement balance; BNPL/credit card interest and late fees cost far more than savings earn. Pay highest-rate debt first (avalanche) or smallest first for motivation (snowball). Treat PayLater installments as fixed bills when planning; avoid stacking new ones while old ones run.
+- Sinking funds: for known yearly costs (gifts, Christmas, insurance, gadgets) divide by the months left and set aside each payday. 13th month pay (December) is a good time to top up the emergency fund or clear debt.
+- Big purchases: affordable if it doesn't drop the emergency fund below 3 months and the monthly cost fits under the cap; otherwise suggest saving for it first with a monthly amount and date.
+- Philippines (as of late 2026): bank interest has 20% final tax; PDIC insures deposits up to ₱1,000,000 per depositor per bank (since Mar 2025), so split larger amounts across banks. Pag-IBIG MP2: 5-year term, tax-free dividends, 7.12% for 2025 (declared Feb 2026; future rates vary). Maya Time Deposit Plus: 3% p.a. base, up to 6% boosted, interest paid monthly, ₱1M cap per account. Inflation was 7.8% in Oct 2026 (2026 average so far 5.6%), so a 6% time deposit (4.8% after tax) earns less than inflation; money kept only in low-interest accounts loses value.
+- Stay with savings, budgeting and debt. For specific stocks, funds, crypto, insurance products or tax filing, give general information only.`;
+const AI_RULES = 'You are Pera, a friendly money helper inside a personal finance app for someone in the Philippines. Use only the data given for their numbers; when it doesn’t cover something, say so plainly, but still give a useful suggestion using the know-how below. Show peso amounts like ₱1,234. Be brief and concrete: lead with the answer, then a few short lines or bullets. "No description" means spending recorded without a note, mostly from an old spreadsheet. Only when the person asks about investing, taxes or legal matters, give general information and suggest checking with a licensed professional; never add that note otherwise.\n\n' + FIN_KNOWLEDGE;
 const FOLLOW_RULE = '\n\nAfter the answer, on its own last line, write ">>" followed by 2 or 3 short follow-up questions the person might tap next, in their voice, separated by " | " (each under 45 characters, about their own money, answerable from the data). Example: >> How much should I save each payday? | What if I save ₱25,000 a month?';
 // split an answer into the text to show and the follow-up suggestions (also hides a half-written ">>" line while streaming)
 function splitFollow(t) {
