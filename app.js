@@ -236,6 +236,14 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && us
 setInterval(() => { if (dirty.size && navigator.onLine) push(); }, 30000);
 
 /* ================= maths ================= */
+// money that went into savings left as a transfer: count it as saved, not spent
+// (₱29k transferred, ₱10k of it deposited to savings → ₱19k spent, ₱10k saved)
+function savedOut(y, i) {
+  const m = S.years[y] && S.years[y][i]; if (!m) return 0;
+  const linked = potDepositsIn(y, i).reduce((t, x) => t + x.d.a, 0); if (!linked) return 0;
+  const tr = m.exp.reduce((t, x) => t + ((x.c && CAT_NAMES.includes(x.c) ? x.c : catOf(x.n || '')) === 'Transfers' && +x.a > 0 ? +x.a : 0), 0);
+  return Math.min(linked, tr);
+}
 function series() {
   const out = [], now = today(), CY = now.getFullYear(), CM = now.getMonth();
   let run = 0;
@@ -243,7 +251,8 @@ function series() {
     const inc = sum(m.inc), exp = sum(m.exp) + sum(billsIn(y, i)), manual = +m.sav || 0;
     const linked = potDepositsIn(y, i).reduce((t, x) => t + x.d.a, 0);
     run = run + inc - manual - exp;          // savings deposits are shown, never subtracted
-    out.push({y, i, inc, exp, sav: linked || manual, linked, manual, total: run, past: +y < CY || (+y === CY && i <= CM), now: +y === CY && i === CM});
+    const carved = savedOut(y, i);
+    out.push({y, i, inc, exp, spent: Math.max(0, exp - carved), carved, sav: linked || manual, linked, manual, total: run, past: +y < CY || (+y === CY && i <= CM), now: +y === CY && i === CM});
   });
   return out;
 }
@@ -326,8 +335,8 @@ function spentByDay(y, i, day) {   // spending in a month up to a day of that mo
 function homeMonth(cur, prev) {
   const box = $('hMonth'), t = today(), isNow = cur.now;
   const days = new Date(+cur.y, cur.i + 1, 0).getDate(), day = isNow ? t.getDate() : days;
-  const out = cur.exp + cur.manual, left = cur.inc - out, over = left < 0;
-  const pct = cur.inc > 0 ? Math.min(100, out / cur.inc * 100) : (out > 0 ? 100 : 0);
+  const out = cur.exp + cur.manual, left = cur.inc - out, over = left < 0, savedPart = cur.carved + cur.manual;
+  const pct = cur.inc > 0 ? Math.min(100, out / cur.inc * 100) : (out > 0 ? 100 : 0), sPct = cur.inc > 0 ? Math.min(pct, savedPart / cur.inc * 100) : 0;
   let pace = '';
   if (prev && isNow && S.years[prev.y]) {
     const lastBy = spentByDay(prev.y, prev.i, day), nowBy = spentByDay(cur.y, cur.i, day), diff = nowBy - lastBy;
@@ -338,10 +347,10 @@ function homeMonth(cur, prev) {
   box.hidden = false;
   box.innerHTML = `<div class="hhead"><h3>${isNow ? 'This month' : M[cur.i] + ' ' + cur.y}</h3>${isNow ? `<span class="muted">Day ${day} of ${days}</span>` : ''}</div>
     <div class="leftnum"><b class="${over ? 'dn' : ''}" data-count="left" data-n="${Math.abs(left)}" data-d="0">${esc(peso(Math.abs(left)))}</b><span>${over ? 'more went out than came in' : cur.inc ? 'left after spending and saving' : 'no income added yet'}</span></div>
-    <div class="pbar${over ? ' over' : ''}" role="img" aria-label="${Math.round(pct)}% of income used"><b style="width:${pct.toFixed(1)}%"></b>${tick != null ? `<i style="left:${tick.toFixed(1)}%" title="Even pace for day ${day}"></i>` : ''}</div>
-    <div class="pmeta"><span>${cur.inc ? Math.round(out / cur.inc * 100) + '% of income used' : ''}</span>${tick != null ? '<span class="muted">┆ even pace</span>' : ''}</div>
+    <div class="pbar${over ? ' over' : ''}" role="img" aria-label="${Math.round(pct)}% of income used"><b style="width:${pct.toFixed(1)}%"></b>${sPct > 0 && !over ? `<b class="savpart" style="left:${(pct - sPct).toFixed(1)}%;width:${sPct.toFixed(1)}%"></b>` : ''}${tick != null ? `<i style="left:${tick.toFixed(1)}%" title="Even pace for day ${day}"></i>` : ''}</div>
+    <div class="pmeta"><span>${cur.inc ? (savedPart > 0 && !over ? `${Math.round(cur.spent / cur.inc * 100)}% spent · <span class="savtxt">${Math.round(savedPart / cur.inc * 100)}% saved</span>` : Math.round(out / cur.inc * 100) + '% of income used') : ''}</span>${tick != null ? '<span class="muted">┆ even pace</span>' : ''}</div>
     ${pace ? `<p class="pace">${pace}</p>` : ''}
-    <div class="mini"><button data-act="goto-month" data-y="${esc(cur.y)}" data-i="${cur.i}"><span>In</span><b class="up">${esc(pesoS(cur.inc))}</b></button><button data-act="goto-month" data-y="${esc(cur.y)}" data-i="${cur.i}"><span>Spent</span><b class="dn">${esc(pesoS(cur.exp))}</b></button><button data-act="go-view" data-v="savings"><span>Saved</span><b>${esc(pesoS(cur.sav))}</b></button></div>`;
+    <div class="mini"><button data-act="goto-month" data-y="${esc(cur.y)}" data-i="${cur.i}"><span>In</span><b class="up">${esc(pesoS(cur.inc))}</b></button><button data-act="goto-month" data-y="${esc(cur.y)}" data-i="${cur.i}"><span>Spent</span><b class="dn">${esc(pesoS(cur.spent))}</b></button><button data-act="go-view" data-v="savings"><span>Saved</span><b>${esc(pesoS(cur.sav))}</b></button></div>`;
 }
 function homeBills() {
   const box = $('hBills'), t0 = todayIso(), from = iso(new Date(today().getFullYear(), today().getMonth(), today().getDate() - 30)), lim = iso(new Date(today().getFullYear(), today().getMonth(), today().getDate() + 35));
@@ -1231,7 +1240,7 @@ const catOf = (n, bill) => {
   const s = n.toLowerCase(); const c = CATS.find(([, re]) => re.test(s)); return c ? c[0] : 'Other';
 };
 const isTransfer = (n, bill) => catOf(n, bill) === 'Transfers';
-let insTr = store.get('pera:insTr') === true;   // include transfers in spending?
+let insTr = store.get('pera:insTr') !== false;   // include transfers in spending? (on by default: money sent out is spent, except the part that went to savings)
 const BRANDS = [['Shopee', /shopee/], ['Lazada Travel', /lazada travel/], ['Lazada', /lazada/], ['Food Panda', /food ?panda|fp\*/], ['Grab', /\bgrab/], ['Steam', /steam/], ['GCash', /gcash/],
   ['Netflix', /netflix/], ['Spotify', /spotify/], ['YouTube', /youtube/], ['Apple', /apple\.com|itunes/], ['Google', /google/], ['Jollibee', /jollibee/], ['McDonald’s', /mcdo|mcdonald/],
   ['Starbucks', /starbucks/], ['Meralco', /meralco/], ['Mercury Drug', /mercury drug/], ['Watsons', /watsons/], ['7-Eleven', /7-?eleven/], ['Puregold', /puregold/], ['SM Supermarket', /sm supermarket/], ['Angkas', /angkas/], ['Agoda', /agoda/]];
@@ -1259,7 +1268,9 @@ function spendingIn(months) {
     m.exp.forEach(x => rows.push({n: x.n || '', a: +x.a, y, i, c: x.c}));
     billsIn(y, i).forEach(b => rows.push({n: b.name, a: +b.a, y, i, bill: true}));
   }
-  return rows.map(r => ({...r, cat: r.c && CAT_NAMES.includes(r.c) ? r.c : catOf(r.n, r.bill)}));
+  const out = rows.map(r => ({...r, cat: r.c && CAT_NAMES.includes(r.c) ? r.c : catOf(r.n, r.bill)}));
+  for (const {y, i} of months) { const c = savedOut(y, i); if (c > 0) out.push({n: 'Moved to savings', a: -c, y, i, cat: 'Transfers', saved: true}); }
+  return out;
 }
 // a month's income and spending as Insights counts them (transfers out unless switched on)
 function monthFlows(y, i) {
@@ -1321,7 +1332,7 @@ function renderInsights(ser) {
   <div class="reports">${REPORTS.map(([k, l, ic]) => `<button class="repbtn" data-act="report" data-r="${k}"><span class="repic" aria-hidden="true">${ic}</span>${l}</button>`).join('')}</div>
   <div class="insgrid">
     <section class="card inscard"><div class="inshead"><h3>Where your money goes</h3><button class="chip trchip" data-act="ins-tr" aria-pressed="${insTr}">${insTr ? '✓ ' : ''}Include transfers</button></div>
-      <p class="muted">${esc(peso(total))} spent in ${pLabel}${!insTr && moved ? ` · ${esc(peso(moved))} moved between accounts, not counted` : ''}</p>
+      <p class="muted">${esc(peso(total))} spent in ${pLabel}${!insTr && moved ? ` · ${esc(peso(moved))} in transfers not counted` : ''}${(sv => sv ? ` · ${esc(peso(sv))} moved to savings not counted` : '')(-allRows.filter(r => r.saved).reduce((s, r) => s + r.a, 0))}</p>
       ${cats.length ? `<div class="catrows">${cats.map(([c, v]) => `<button class="cr" data-act="ins-cat" data-c="${esc(c)}" style="--c:${catCol(c)}"><span><b class="catdot"></b>${esc(c)}</span><i><b style="width:${(v / maxC * 100).toFixed(1)}%"></b></i><span>${esc(pesoS(v))}<small>${total ? Math.round(v / total * 100) : 0}%</small></span></button>`).join('')}</div>
       <p class="muted">Tap a category to see what’s in it and move merchants to the right one.</p>` : '<p class="empty">No spending in this period.</p>'}
       ${noDesc > 0 ? `<p class="muted">“No description” is spending without a note, mostly from your spreadsheet. Imported statements and new entries are sorted automatically.</p>` : ''}</section>
@@ -1476,8 +1487,8 @@ function aiHTML(t) {
 function aiContext(opts = {}) {
   const t = today(), ser = series().filter(p => p.inc || p.exp), L = [];
   L.push(`Today: ${todayIso()} (${t.toLocaleDateString('en-PH', {weekday: 'long'})}). Currency: Philippine peso (₱). Paid on the 15th and 30th; ${payCut() ? `bills due on the ${ord(payCut())} or later count in their own month, earlier ones in the month before` : 'bills count in the month before they are due'}.`);
-  L.push('Months (income | spent incl. bills | saved | total money at month end):');
-  ser.slice(-18).forEach(p => L.push(`${p.y}-${String(p.i + 1).padStart(2, '0')}${p.now ? ' (this month, so far)' : p.past ? '' : ' (planned)'}: ${Math.round(p.inc)} | ${Math.round(p.exp)} | ${Math.round(p.sav)} | ${Math.round(p.total)}`));
+  L.push('Months (income | spent incl. bills, not counting money moved to savings | saved | total money at month end):');
+  ser.slice(-18).forEach(p => L.push(`${p.y}-${String(p.i + 1).padStart(2, '0')}${p.now ? ' (this month, so far)' : p.past ? '' : ' (planned)'}: ${Math.round(p.inc)} | ${Math.round(p.spent)} | ${Math.round(p.sav)} | ${Math.round(p.total)}`));
   L.push('Spending by category per month (transfers between own accounts left out):');
   lastMonths(6).forEach(m => { const by = {}; spendingIn([m]).forEach(r => { if (r.cat !== 'Transfers') by[r.cat] = (by[r.cat] || 0) + r.a; }); L.push(`${m.y}-${String(m.i + 1).padStart(2, '0')}: ${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([c, v]) => `${c} ${Math.round(v)}`).join(', ') || 'none'}`); });
   // bills: exact totals worked out here so the AI doesn't add them up itself, plus which payday pays each one
@@ -1843,7 +1854,7 @@ function homeFlow() {
   box.innerHTML = `<div class="hhead"><h3>Income vs spending</h3><button class="plain" data-act="report" data-r="flow">Details</button></div>
     ${flowStats(d)}${legendHTML([[d.useSal ? 'Income (dashed: avg salary)' : 'Income (dashed: average)', 'var(--blue)'], ['Spent (dashed: average)', 'var(--red)']])}
     <button class="flowfigbtn" data-act="report" data-r="flow" aria-label="Open income vs spending details"><svg class="flowfig" aria-hidden="true"></svg></button>
-    <p class="muted flowfoot">Averages use the last ${d.done.length} finished month${d.done.length === 1 ? '' : 's'}${insTr ? '' : '; transfers between your accounts are left out'}.</p>`;
+    <p class="muted flowfoot">Averages use the last ${d.done.length} finished month${d.done.length === 1 ? '' : 's'}${insTr ? '; money you moved to savings counts as kept, not spent' : '; transfers are left out'}.</p>`;
   requestAnimationFrame(() => { const svg = box.querySelector('svg'); if (svg) flowSVG(svg, d, false); });
 }
 const REPORTS = [['flow', 'Income vs spending', '⇅'], ['trend', 'Spending trend', '≡'], ['cal', 'Spending calendar', '#'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '↓']];
