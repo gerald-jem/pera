@@ -722,8 +722,36 @@ function tdCycle(pot, c) {
   let bal = 0, interest = 0, principal = 0, now = 0;
   items.forEach(it => { it.days = Math.max(0, daysBetween(it.date, end)); it.net = net(it.a, it.date); interest += it.net; principal += it.a; bal += it.a + it.net; it.bal = bal; it.planned = it.date > t; if (!it.planned) now += it.a; });
   const credited = (c.credits || []).filter(x => x.date <= t).reduce((a, x) => a + x.a, 0);   // interest the bank already paid in (from a statement)
+  if (tdMonthlyOn(pot)) {   // interest paid in every month (Maya Time Deposit Plus): it earns interest too
+    const pays = tdPayouts(pot, c, rate, tax, end); interest = pays.reduce((a, x) => a + x.a, 0);
+    const paid = pays.filter(x => x.date <= t).reduce((a, x) => a + x.a, 0); now += paid;
+    let run = 0; items.forEach(it => { run += it.a; it.bal = run; it.net = null; });
+    return {end, rate, items, closing: principal + interest, principal, interest, credited, paid, pays, monthly: true, now, done: t >= end, prog: Math.min(1, Math.max(0, daysBetween(c.start, t) / Math.max(1, daysBetween(c.start, end))))};
+  }
   now += credited;
   return {end, rate, items, closing: principal + interest, principal, interest, credited, now, done: t >= end, prog: Math.min(1, Math.max(0, daysBetween(c.start, t) / Math.max(1, daysBetween(c.start, end))))};
+}
+// monthly payout accounts: interest = daily balance × rate × (1 − tax) ÷ 365, paid in on the 1st (and at maturity),
+// then earning interest itself. Matches Maya's statement to the centavo.
+const tdMonthlyOn = p => p.monthly ?? ((p.cycles || []).some(c => (c.credits || []).length) || /maya/i.test(p.name || ''));
+function tdPayouts(pot, c, rate, tax, end) {
+  const ev = {}; const add = (d, a) => { ev[d] = (ev[d] || 0) + a; };
+  if (+c.carry) add(c.start, +c.carry); (c.deposits || []).forEach(d => add(d.date, +d.a));
+  const actual = (c.credits || []), out = [], t = todayIso();
+  let bal = 0, acc = 0, day = c.start, from = c.start;
+  const payout = date => {
+    // a payout the statement already shows (within a few days of the 1st) wins over the prediction
+    const got = actual.filter(x => x.date >= date && daysBetween(date, x.date) <= 4), a = got.length ? got.reduce((s, x) => s + x.a, 0) : Math.round(acc * 100) / 100;
+    if (a > 0 || got.length) out.push({date: got.length ? got[0].date : date, from, a, actual: !!got.length, paid: (got.length ? got[0].date : date) <= t});
+    bal += a; acc = 0; from = date;
+  };
+  for (let n = 0; day < end && n < 800; n++, day = addDays(day, 1)) {
+    if (day.endsWith('-01') && day !== c.start) payout(day);
+    bal += ev[day] || 0;
+    acc += bal * rate * (1 - tax) / 365;
+  }
+  payout(end);   // the last part at maturity
+  return out;
 }
 const tdCurrent = pot => { const t = todayIso(), cs = pot.cycles || []; let k = cs.length - 1; for (let i = 0; i < cs.length; i++) if (cs[i].start <= t) k = i; return Math.max(0, k); };
 
@@ -779,7 +807,7 @@ function renderSavings() {
     let sub = '', big = potNow(p), bar = null;
     if (p.kind === 'td') {
       if (!(p.cycles || []).length) sub = 'No cycle yet · tap to start one';
-      else { const k = tdCurrent(p), c = tdCycle(p, p.cycles[k]); bar = c.prog; sub = c.done ? `Cycle ended ${fmtDate(c.end)} · tap to start the next` : `${esc(peso(c.closing))} at maturity, ${esc(fmtDate(c.end))}`; }
+      else { const k = tdCurrent(p), c = tdCycle(p, p.cycles[k]); bar = c.prog; const nx = c.monthly && c.pays.find(x => !x.paid); sub = c.done ? `Cycle ended ${fmtDate(c.end)} · tap to start the next` : `${nx ? `Next interest ~${esc(peso(nx.a, 2))} on ${esc(fmtDate(nx.date, {month: 'short', day: 'numeric'}))} · ` : ''}${esc(peso(c.closing))} at maturity, ${esc(fmtDate(c.end))}`; }
     } else if (p.kind === 'mp2') { const m = mp2Calc(p); sub = m.maturity ? `${esc(peso(m.atMaturity))} projected at maturity, ${esc(fmtDate(m.maturity, {month: 'short', year: 'numeric'}))} · ${pct(p.rate)} dividend` : 'No contributions yet'; if (m.maturity) bar = Math.min(1, Math.max(0, daysBetween(m.start, todayIso()) / daysBetween(m.start, m.maturity))); }
     else { const b = basicCalc(p); sub = `${pct(p.rate || 0)} p.a.${b.interest ? ` · ${esc(peso(b.interest, 2))} interest so far` : ''}`; }
     return `<button class="card potcard" data-act="pot-open" data-p="${esc(p.id)}"><div class="muted">${esc(p.name)} · ${esc(KIND[p.kind])}</div>
@@ -945,16 +973,16 @@ function potHTML(p, k, editing, cedit, fedit, frate) {
     const c = tdCycle(p, cs[k]), last = k === cs.length - 1;
     return head + `<div class="chips cyclechips">${cs.map((x, i) => `<button class="chip" data-act="pot-cycle" data-p="${esc(p.id)}" data-k="${i}" aria-pressed="${i === k}">${esc(fmtDate(x.start, {month: 'short', year: 'numeric'}))}</button>`).join('')}</div>
       <div class="trio"><div class="tile"><span>Put in</span><b>${esc(pesoS(c.principal))}</b></div><div class="tile"><span>Interest</span><b class="up">+${esc(peso(c.interest, 2))}</b></div><div class="tile"><span>At maturity</span><b>${esc(pesoS(c.closing))}</b></div></div>
-      ${c.credited ? `<p class="muted">${esc(peso(c.credited, 2))} interest already paid in this cycle, from your statement (included in the balance).</p>` : ''}
+      ${c.monthly ? payoutsHTML(c) : c.credited ? `<p class="muted">${esc(peso(c.credited, 2))} interest already paid in this cycle, from your statement (included in the balance).</p>` : ''}
       ${cedit ? `<form id="cycF" class="depedit" novalidate><div class="two"><div><label for="cRate">Interest % per year</label><input id="cRate" inputmode="decimal" value="${(c.rate * 100).toFixed(3).replace(/\.?0+$/, '')}"></div><div><label for="cCarry">Carried over</label><input id="cCarry" inputmode="decimal" value="${esc(cs[k].carry || 0)}"></div></div>
         <div class="two"><div><label for="cStart">Starts</label><input id="cStart" type="date" value="${esc(cs[k].start)}"></div><div><label for="cEnd">Ends</label><input id="cEnd" type="date" value="${esc(c.end)}"></div></div>
         <div class="two" style="margin-top:10px"><button type="button" class="plain" data-act="cyc-cancel" style="margin:0">Cancel</button><button class="go" type="submit" style="margin:0">Save cycle</button></div>
         <button type="button" class="danger" data-act="cyc-del" data-p="${esc(p.id)}">Delete this cycle</button></form>`
-      : `<button class="cycinfo" data-act="cyc-edit" data-p="${esc(p.id)}"><span>${esc(fmtDate(cs[k].start))} – ${esc(fmtDate(c.end))} · <b>${pct(c.rate)} p.a.</b> · ${pct(p.tax ?? .2)} tax · each deposit earns only for the days left</span><span class="ghost">Edit cycle</span></button>`}
+      : `<button class="cycinfo" data-act="cyc-edit" data-p="${esc(p.id)}"><span>${esc(fmtDate(cs[k].start))} – ${esc(fmtDate(c.end))} · <b>${pct(c.rate)} p.a.</b> · ${pct(p.tax ?? .2)} tax · ${c.monthly ? 'interest paid in monthly' : 'each deposit earns only for the days left'}</span><span class="ghost">Edit cycle</span></button>`}
       <div class="bar"><i style="width:${(c.prog * 100).toFixed(1)}%"></i></div>
       <ul class="list deplist">${c.items.map(it => {
         if (!it.carry && it.id === editing) return editRow(k, it, 'Deposit');
-        const inner = `<span class="t">${it.carry ? 'Carried over' : esc(fmtDate(it.date))}<small>${it.days} days · +${esc(peso(it.net, 2))} interest${it.planned ? ' · planned' : ''}</small></span><span class="amtcol"><b class="amt">${esc(peso(it.a, 2))}</b><small>${esc(peso(it.bal, 2))}</small></span>`;
+        const inner = `<span class="t">${it.carry ? 'Carried over' : esc(fmtDate(it.date))}<small>${it.net == null ? `${it.days} days left` : `${it.days} days · +${esc(peso(it.net, 2))} interest`}${it.planned ? ' · planned' : ''}</small></span><span class="amtcol"><b class="amt">${esc(peso(it.a, 2))}</b><small>${esc(peso(it.bal, 2))}</small></span>`;
         return `<li class="${it.planned ? 'planned' : ''}">${it.carry ? `<button class="rowbtn depbtn" data-act="cyc-edit" data-p="${esc(p.id)}" aria-label="Edit carried-over amount and interest rate">${inner}</button><span class="x" aria-hidden="true"></span>` : rowBtn(k, it, inner) + delBtn(k, it)}</li>`;
       }).join('')}</ul>
       <p class="muted">Tap a deposit to change its date or amount. Tap “Carried over” or the cycle line to change the interest rate.</p>
@@ -1040,6 +1068,7 @@ function potForm(id) {
       <div class="two"><div><label for="pRate" id="pRateL">Interest % per year</label><input id="pRate" inputmode="decimal" value="${(p.rate * 100).toFixed(2).replace(/\.?0+$/, '')}"></div>
         <div id="pTaxW"><label for="pTax">Tax on interest %</label><input id="pTax" inputmode="decimal" value="${((p.tax ?? .2) * 100).toFixed(0)}"></div></div>
       <div id="pTdW"><label for="pDays">Cycle length (days)</label><input id="pDays" inputmode="numeric" value="${p.cycleDays || 181}">
+        <label class="check"><input type="checkbox" id="pMonthly" ${(id ? tdMonthlyOn(p) : false) ? 'checked' : ''}><span>Interest is paid in every month (like Maya Time Deposit Plus)</span></label>
         ${id ? '' : `<div class="two"><div><label for="pStart">First cycle starts</label><input id="pStart" type="date" value="${todayIso()}"></div><div><label for="pOpen">Opening amount</label><input id="pOpen" inputmode="decimal" placeholder="₱0"></div></div>`}</div>
       <div id="pMp2W"><label for="pPay">Dividends</label><select id="pPay"><option value="compound" ${p.payout !== 'annual' ? 'selected' : ''}>Compounded (added to savings)</option><option value="annual" ${p.payout === 'annual' ? 'selected' : ''}>Paid out every year</option></select></div>
       <div id="pBasicW">${id ? '' : `<div class="two"><div><label for="pBDate">Balance as of</label><input id="pBDate" type="date" value="${todayIso()}"></div><div><label for="pBal">Current balance</label><input id="pBal" inputmode="decimal" placeholder="₱0"></div></div>`}</div>
@@ -1054,10 +1083,11 @@ function potForm(id) {
       $('pName').classList.toggle('bad', !name); $('pRate').classList.toggle('bad', isNaN(rate)); if (!name || isNaN(rate)) return;
       if (id) {
         Object.assign(p, {name, rate, tax: isNaN(tax) ? p.tax : tax, cycleDays: +$('pDays').value || p.cycleDays, payout: $('pPay').value});
+        if (p.kind === 'td') p.monthly = $('pMonthly').checked;
         commit('meta'); return potSheet(p.id);
       }
       const kind = $('pKind').value, np = {id: uid(), name, kind, rate};
-      if (kind === 'td') { Object.assign(np, {tax: isNaN(tax) ? .2 : tax, cycleDays: +$('pDays').value || 181}); const st = $('pStart').value || todayIso(), op = parseAmt($('pOpen').value || '0'); np.cycles = [{start: st, end: addDays(st, np.cycleDays), rate, carry: 0, deposits: op > 0 ? [{id: uid(), date: st, a: op}] : []}]; }
+      if (kind === 'td') { Object.assign(np, {tax: isNaN(tax) ? .2 : tax, cycleDays: +$('pDays').value || 181, monthly: $('pMonthly').checked}); const st = $('pStart').value || todayIso(), op = parseAmt($('pOpen').value || '0'); np.cycles = [{start: st, end: addDays(st, np.cycleDays), rate, carry: 0, deposits: op > 0 ? [{id: uid(), date: st, a: op}] : []}]; }
       if (kind === 'mp2') Object.assign(np, {payout: $('pPay').value, rates: {2025: 0.0712, 2024: 0.071, 2023: 0.0705}, deposits: []});
       if (kind === 'basic') { const b = parseAmt($('pBal').value || '0'); Object.assign(np, {tax: isNaN(tax) ? .2 : tax, txns: b ? [{id: uid(), date: $('pBDate').value || todayIso(), a: b}] : []}); }
       pots().push(np); commit('meta'); potSheet(np.id);
@@ -1199,6 +1229,13 @@ function drawForecast() {
 }
 const fcRO = new ResizeObserver(drawForecast);
 // forecast section inside a time-deposit sheet
+function payoutsHTML(c) {
+  const next = c.pays.find(x => !x.paid), md = d => fmtDate(d, {month: 'short', day: 'numeric'});
+  return `<div class="payouts"><div class="hhead"><h3>Monthly interest</h3>${next ? `<span class="muted">next ${esc(md(next.date))} · <b class="up">~${esc(peso(next.a, 2))}</b></span>` : ''}</div>
+    <p class="muted">${esc(peso(c.paid, 2))} paid in so far${c.pays.some(x => x.actual) ? ' (from your statement where added)' : ''} · ${esc(peso(c.interest - c.paid, 2))} more expected by ${esc(md(c.end))}. Predictions assume deposits as listed and the ${pct(c.rate)} rate holds.</p>
+    <table class="ytable"><thead><tr><th>Paid on</th><th>For</th><th>Interest</th></tr></thead><tbody>${c.pays.map(x => `<tr class="${x.paid ? '' : 'est'}"><td>${esc(md(x.date))}</td><td>${esc(md(x.from))} – ${esc(md(addDays(x.date, -1)))}</td><td class="up">+${esc(peso(x.a, 2))}${x.actual ? ' ✓' : x.paid ? '' : ''}</td></tr>`).join('')}</tbody></table>
+    <p class="muted" style="font-size:12px">✓ = amount from your statement · grey = predicted</p></div>`;
+}
 function tdForecastHTML(p, fedit, frate) {
   const plan = planOf(p), fc = tdForecast(p), cs = p.cycles || [];
   const all = [...cs.map(c => ({start: c.start, end: tdCycle(p, c).end, closing: tdCycle(p, c).closing, actual: true})), ...fc];

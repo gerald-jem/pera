@@ -536,3 +536,5 @@ main.app{display:block}header.top{display:flex}
 
 .potshot{display:flex;justify-content:center;align-items:center;margin-top:8px}.implist li.dupe .t{opacity:.6}
 .implist li.ps-del .t{color:var(--red)}
+
+.payouts{margin:12px 0}.payouts h3{margin:0;font-size:16px}.payouts .ytable tr.est td{color:var(--mute)}
