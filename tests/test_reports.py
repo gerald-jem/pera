@@ -32,6 +32,7 @@ async def run(b, scheme):
     await ph.locator('.reports').scroll_into_view_if_needed(); await ph.wait_for_timeout(300)
     if scheme=='light': await ph.locator('#insights').screenshot(path=OUT+'/rep_row.png')
     for r in ['trend','cal','rate','debt']:
+        if not await ph.locator(f'[data-act=report][data-r={r}]').count(): await ph.click('[data-act=rep-more]'); await ph.wait_for_timeout(300)
         await ph.click(f'[data-act=report][data-r={r}]'); await ph.wait_for_timeout(500)
         hit = ph.locator('#sheetBody .hit, #sheetBody .calday.s3, #sheetBody .calday.s5')
         if await hit.count(): await hit.nth(min(3, await hit.count()-1)).click(); await ph.wait_for_timeout(200)

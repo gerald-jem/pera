@@ -70,13 +70,16 @@ async def main():
     check('AI is told the uneven split (₱20,000 / ₱45,000)', 'about 20000 on the 15th and 45000 on the 30th' in sysm, sysm[sysm.find('uneven') - 20: sysm.find('uneven') + 120])
     await close()
 
-    # reports
+    # reports (some sit under "More reports")
+    async def openRep(r):
+        if not await ph.locator(f'[data-act=report][data-r={r}]').count(): await ph.click('[data-act=rep-more]'); await ph.wait_for_timeout(300)
+        await ph.click(f'[data-act=report][data-r={r}]'); await ph.wait_for_timeout(600)
     for r, want in [('subs', 'Netflix'), ('worth', 'Net worth'), ('year', 'in review')]:
-        await ph.evaluate(f"document.querySelector('[data-act=report][data-r={r}]').click()"); await ph.wait_for_timeout(600)
+        await openRep(r)
         t = await ph.inner_text('#sheetBody'); check(f'report {r} opens', want in t, t[:120])
         if r == 'subs': check('Netflix price rise flagged', 'up ₱70.00' in t, t[:300])
         await close()
-    await ph.evaluate("document.querySelector('[data-act=report][data-r=home]').click()"); await ph.wait_for_timeout(500)
+    await openRep('home')
     await ph.fill('#hlPrice', '3000000'); await ph.wait_for_timeout(200); t = await ph.inner_text('#hlOut')
     check('home loan: payment and income needed shown', 'Monthly payment' in t and 'gross' in t, t[:200])
     await ph.click('[data-act=hl-goal]'); await ph.wait_for_timeout(400); check('down payment becomes a goal', await ph.input_value('#gN') == 'House down payment')

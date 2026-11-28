@@ -1494,7 +1494,7 @@ function renderInsights(ser) {
 
   box.innerHTML = `<div class="inshead"><h2>Insights</h2><div class="seg insseg">${[['month', 'This month'], ['3m', '3 months'], ['year', 'This year'], ['lastyear', 'Last year']].map(([k, l]) => `<button data-act="ins-p" data-k="${k}" aria-pressed="${k === insP}">${l}</button>`).join('')}</div></div>
   <button class="aibar" data-act="sort-spend"><span class="sparkic">${SPARK}</span><span>Sort my spending<small>AI sorts bank text and catches entries in the wrong category</small></span><span class="chev">›</span></button>
-  <div class="reports">${REPORTS.map(([k, l, ic]) => `<button class="repbtn" data-act="report" data-r="${k}"><span class="repic" aria-hidden="true">${ic}</span>${l}</button>`).join('')}</div>
+  ${reportsHTML()}
   <div class="insgrid">
     <section class="card inscard"><div class="inshead"><h3>Where your money goes</h3><button class="chip trchip" data-act="ins-tr" aria-pressed="${insTr}">${insTr ? '✓ ' : ''}Include transfers</button></div>
       <p class="muted">${esc(peso(total))} spent in ${pLabel}${!insTr && moved ? ` · ${esc(peso(moved))} in transfers not counted` : ''}${(sv => sv ? ` · ${esc(peso(sv))} moved to savings not counted` : '')(-allRows.filter(r => r.saved).reduce((s, r) => s + r.a, 0))}</p>
@@ -2387,21 +2387,43 @@ function saveReminders() {
 async function remindToggle() {
   if (remindOn()) { store.set('pera:remind', false); try { const r = await navigator.serviceWorker.ready; if (r.periodicSync) await r.periodicSync.unregister('pera-reminders'); } catch {} toast('Reminders off'); return settings(); }
   if (!('Notification' in window)) return toast('This browser can’t show notifications.');
-  const perm = await Notification.requestPermission();
-  if (perm !== 'granted') { store.set('pera:remindBlocked', true); settings(); return toast('Your phone is blocking Pera’s notifications. See the steps under Reminders.'); }
+  store.set('pera:remindWanted', true);
+  // blocked: phones never show the prompt again, so go straight to the steps; not decided yet: ask (again)
+  const perm = Notification.permission === 'denied' ? 'denied' : await Notification.requestPermission();
+  if (perm !== 'granted') { store.set('pera:remindBlocked', perm === 'denied'); settings(); return toast(perm === 'denied' ? 'Notifications are blocked for Pera. Follow the steps under Reminders, then come back.' : 'No answer yet. Tap the switch again to get the question.'); }
   store.set('pera:remindBlocked', false);
+  return remindTurnOn();
+}
+async function remindTurnOn() {
   store.set('pera:remind', true); saveReminders();
   let bg = false;
   try { const r = await navigator.serviceWorker.ready; if (r.periodicSync) { const st = await navigator.permissions.query({name: 'periodic-background-sync'}); if (st.state === 'granted') { await r.periodicSync.register('pera-reminders', {minInterval: 12 * 3600e3}); bg = true; } } } catch {}
-  store.set('pera:remindBg', bg);
+  store.set('pera:remindBg', bg); store.set('pera:remindWanted', false);
   toast(bg ? 'Reminders on: Pera checks in the background a couple of times a day' : 'Reminders on while Pera is open. Install Pera to your home screen for background reminders.');
-  settings();
+  if ($('payCut')) settings();   // refresh Settings only if it's open
 }
+// back from the phone's settings: if they allowed notifications, finish turning reminders on
+async function remindRecheck(asked) {
+  if (!('Notification' in window) || remindOn()) return;
+  if (Notification.permission === 'granted' && (store.get('pera:remindWanted') || asked)) { store.set('pera:remindBlocked', false); await remindTurnOn(); }
+  else if (asked) toast(Notification.permission === 'denied' ? 'Still blocked. Check the Notifications switch for Pera, then try again.' : 'Not allowed yet. Tap the Reminders switch to be asked.');
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') remindRecheck(false); });
+try { navigator.permissions && navigator.permissions.query({name: 'notifications'}).then(st => { st.onchange = () => remindRecheck(false); }); } catch {}
 // due today / in two days: say it when the app opens too
 function dueSoon() { const t = todayIso(); return (S.meta.bills || []).filter(b => !b.paid && b.due && b.due >= t && daysBetween(t, b.due) <= 2).sort((a, b) => a.due.localeCompare(b.due)); }
 
 const REPORTS = [['flow', 'Income vs spending', '⇅'], ['subs', 'Subscriptions', '↻'], ['worth', 'Net worth', '▤'], ['year', 'Year in review', '★'], ['home', 'Home loan planner', '⌂'], ['trend', 'Spending trend', '≡'], ['cal', 'Spending calendar', '#'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '↓']];
-let repState = {months: 6, cal: null};
+let repState = {months: 6, cal: null}, repMore = false;
+// the 4 reports you open most come first (this phone); the rest wait under "More reports"
+const REP_DEFAULT = ['flow', 'subs', 'worth', 'trend'];
+function reportsHTML() {
+  const use = store.get('pera:repUse') || {}, rank = k => (use[k] || 0) * 10 + (REP_DEFAULT.includes(k) ? 4 - REP_DEFAULT.indexOf(k) : 0);
+  const sorted = REPORTS.slice().sort((a, b) => rank(b[0]) - rank(a[0])), top = sorted.slice(0, 4), rest = sorted.slice(4);
+  const btn = ([k, l, ic]) => `<button class="repbtn" data-act="report" data-r="${k}"><span class="repic" aria-hidden="true">${ic}</span>${l}</button>`;
+  return `<div class="reports">${top.map(btn).join('')}${repMore ? rest.map(btn).join('') : ''}</div>
+    <button class="ghost moreReps" data-act="rep-more" aria-expanded="${repMore}">${repMore ? 'Fewer reports' : `More reports (${rest.length})`}</button>`;
+}
 const lastMonths = n => { const t = today(), out = []; for (let k = n - 1; k >= 0; k--) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1); if (S.years[d.getFullYear()]) out.push({y: String(d.getFullYear()), i: d.getMonth()}); } return out; };
 const niceUp = v => { if (v <= 0) return 1; const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e; };
 const gridY = (W, H, pl, pr, pt, pb, hi, fmt, lo = 0) => [0, 0.5, 1].map(f => { const v = lo + (hi - lo) * f, y = pt + (1 - f) * (H - pt - pb); return `<line x1="${pl}" x2="${W - pr}" y1="${y}" y2="${y}" stroke="var(--line)"${f ? ' stroke-dasharray="2 4"' : ''}/><text x="${pl - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--mute)">${fmt(v)}</text>`; }).join('');
@@ -2968,7 +2990,7 @@ function settings() {
     <h2>Reminders</h2>
     <div class="switchrow"><span><b>Bills and paydays</b><br><span class="muted">${remindOn() ? (store.get('pera:remindBg') ? 'On. Your phone lets Pera check in the background about twice a day, so a reminder can come a few hours early or late.' : 'On while Pera is open. Install Pera to your home screen (and allow background activity) to get them when it’s closed.') : 'A notification two days before a bill is due, on the due date, and on paydays with how much to save.'}</span></span>
       <button class="switch" role="switch" aria-checked="${remindOn()}" data-act="remind" aria-label="Bill and payday reminders"></button></div>
-    ${!remindOn() && (store.get('pera:remindBlocked') || ('Notification' in window && Notification.permission === 'denied')) ? `<p class="stalenote">Notifications are blocked for Pera. To allow them: long-press the Pera icon on your home screen → <b>App info</b> → <b>Notifications</b> → turn on. (In Chrome instead: ⋮ → Settings → Site settings → Notifications → find Pera’s site → Allow.) Then come back and turn this on.</p>` : ''}
+    ${!remindOn() && (store.get('pera:remindBlocked') || ('Notification' in window && Notification.permission === 'denied')) ? `<div class="stalenote"><b>Notifications are blocked for Pera</b>, and your phone won’t show the question again. To allow them:<ol style="margin:6px 0 8px;padding-left:20px"><li>Long-press the Pera icon on your home screen → <b>App info</b> → <b>Notifications</b> → turn on.</li><li>Or in Chrome: ⋮ → <b>Settings</b> → <b>Site settings</b> → <b>Notifications</b> → Pera’s site → <b>Allow</b>.</li></ol>When you come back, Pera turns reminders on by itself.<button class="go" data-act="remind-recheck" style="margin-top:8px">I’ve allowed it</button></div>` : ''}
     <h2>App lock</h2>
     <div class="switchrow"><span><b>Lock with fingerprint</b><br><span class="muted">Asks for your fingerprint or face when you open Pera and after a minute away. This device only.</span></span>
       <button class="switch" role="switch" aria-checked="${!!lockState}" data-act="lock-toggle" aria-label="Lock with fingerprint"></button></div>
@@ -3839,12 +3861,14 @@ document.addEventListener('click', e => {
     case 'nudge-cat': insP = 'month'; render(); return catSheet(d.c);
     case 'go-view': showView(d.v); render(); return;
     case 'goal-new': return goalNew();
-    case 'report': return reportSheet(d.r);
+    case 'report': { const u = store.get('pera:repUse') || {}; u[d.r] = (u[d.r] || 0) + 1; store.set('pera:repUse', u); return reportSheet(d.r); }
+    case 'rep-more': repMore = !repMore; return render();
     case 'search': return searchSheet();
     case 'ask': return askSheet();
     case 'ask-q': return askPera(d.q);
     case 'cap-set': return capSheet();
     case 'remind': return remindToggle();
+    case 'remind-recheck': return remindRecheck(true);
     case 'home-card': { const h = homeHidden(); h.has(d.k) ? h.delete(d.k) : h.add(d.k); store.set('pera:homeHide', [...h]); applyHomeHide(); const b = $('sheetBody').querySelector(`[data-act=home-card][data-k="${d.k}"]`); if (b) b.setAttribute('aria-checked', String(!h.has(d.k))); return; }
     case 'hl-goal': closeSheet(); return goalNew(+d.a, 'House down payment');
     case 'yr-share': { const t = yearShare; if (navigator.share) navigator.share({text: t}).catch(() => {}); else navigator.clipboard.writeText(t).then(() => toast('Copied, paste it anywhere')).catch(() => toast(t)); return; }
