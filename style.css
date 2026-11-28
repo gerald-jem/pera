@@ -502,3 +502,5 @@ main.app{display:block}header.top{display:flex}
 .aiwriting{display:inline-flex;align-items:center;gap:6px;font-size:14px;color:var(--blue);font-weight:500}
 .spin{width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in srgb,var(--blue) 30%,transparent);border-top-color:var(--blue);animation:spin .8s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
+.retry{margin-top:8px;min-height:36px;padding:0 14px;border-radius:18px;border:1px solid currentColor;background:none;color:var(--ink);font-size:14px}
+.thinking span{font-size:12px;color:var(--mute);margin-left:6px;align-self:center}

@@ -1360,7 +1360,7 @@ async function aiStream(task, payload, onText) {
   if (!navigator.onLine) throw new Error('You’re offline. Pera AI needs the internet.');
   const {data: {session}} = await sb.auth.getSession();
   if (!session) throw new Error('Sign in first.');
-  const ctl = new AbortController(); let timer = setTimeout(() => ctl.abort(), 45000);   // first words within 45 s
+  const ctl = new AbortController(); let timer = setTimeout(() => ctl.abort(), 90000);   // first words within 90 s (Gemini can think a while)
   let r;
   try {
     r = await fetch(`${cfg.supabaseUrl}/functions/v1/pera-ai`, {method: 'POST', signal: ctl.signal,
@@ -1446,23 +1446,30 @@ function askSheet() {
   $('chatF').addEventListener('submit', e => { e.preventDefault(); const q = $('chatQ').value.trim(); if (q) { $('chatQ').value = ''; askPera(q); } });
   setTimeout(() => $('chatQ') && $('chatQ').focus(), 80);
 }
+let chatBusy = 0, chatTick = null;
 function paintChat(thinking) {
   const log = $('chatLog'); if (!log) return;
-  if (chat.length) log.innerHTML = chat.map(m => m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>` : `<div class="msg ai${m.err ? ' err' : ''}">${m.err ? esc(m.text) : aiHTML(m.text)}</div>`).join('') + (thinking ? '<div class="msg ai thinking"><i></i><i></i><i></i></div>' : '');
+  const secs = chatBusy ? Math.round((Date.now() - chatBusy) / 1000) : 0;
+  if (chat.length) log.innerHTML = chat.map((m, k) => m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>`
+    : `<div class="msg ai${m.err ? ' err' : ''}">${m.err ? `${esc(m.text)}${k === chat.length - 1 && !chatBusy ? '<br><button class="retry" data-act="ask-retry">Try again</button>' : ''}` : aiHTML(m.text)}</div>`).join('')
+    + (thinking ? `<div class="msg ai thinking"><i></i><i></i><i></i>${secs >= 4 ? `<span>Thinking… ${secs}s</span>` : ''}</div>` : '');
   const sg = $('chatSugg'); if (sg && chat.length) sg.innerHTML = '';
   log.scrollIntoView({block: 'end'}); $('sheet').scrollTop = $('sheet').scrollHeight;
 }
-async function askPera(q) {
-  chat.push({role: 'user', text: q}); paintChat(true);
+async function askPera(q, again) {
+  if (chatBusy) return;
+  if (!again) chat.push({role: 'user', text: q});
+  chatBusy = Date.now(); paintChat(true);
+  clearInterval(chatTick); chatTick = setInterval(() => { if (chatBusy && !chat.some(m => m.live)) paintChat(true); }, 1000);
   const needRows = /\b(spent|spend|spending|bought|paid|grab|jollibee|shopee|lazada|food|transaction|entry|entries|where|which|list|biggest|most|cut|save|saving|savings|improve)/i.test(q);
-  const msgs = chat.filter(m => !m.err).slice(-12).map(m => ({role: m.role, text: m.text})), live = {role: 'model', text: ''};
+  const msgs = chat.filter(m => !m.err).slice(-12).map(m => ({role: m.role, text: m.text})), live = {role: 'model', text: '', live: true};
   try {
     await aiStream('ask', {system: AI_RULES + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: msgs, maxTokens: 1200, think: 'low'}, t => {
       if (!chat.includes(live)) chat.push(live);
       live.text = t; paintChat();
     });
   } catch (e) { if (chat.includes(live) && live.text) live.text += '\n\n(cut off — try again)'; else chat.push({role: 'model', text: e.message, err: true}); }
-  paintChat();
+  delete live.live; chatBusy = 0; clearInterval(chatTick); paintChat();
 }
 
 /* ---- Sort my spending: the AI suggests categories for bank text it can't place; you approve ---- */
@@ -2881,6 +2888,7 @@ document.addEventListener('click', e => {
     case 'search': return searchSheet();
     case 'ask': return askSheet();
     case 'ask-q': return askPera(d.q);
+    case 'ask-retry': { const last = [...chat].reverse().find(m => m.role === 'user'); if (chat.length && chat[chat.length - 1].err) chat.pop(); if (last) askPera(last.text, true); return; }
     case 'sort-spend': return sortSpending();
     case 'sort-tog': { const r = sortSug && sortSug[+d.k]; if (r) { r.on = !r.on; renderSort(); } return; }
     case 'sort-apply': return applySort();

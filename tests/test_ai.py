@@ -37,6 +37,9 @@ async def main():
     # not set up yet
     await ph.evaluate("window.__aiMode='missing'"); AI['mode']='missing'; await ph.click('[data-act=ask]'); await ph.wait_for_timeout(300)
     await ph.click('[data-act=ask-q] >> nth=0'); await ph.wait_for_timeout(600); print('not deployed:', await ph.inner_text('#chatLog .msg.err'))
+    AI['mode']='ok'; await ph.click('[data-act=ask-retry]'); await ph.wait_for_timeout(700)
+    print('retry:', await ph.locator('#chatLog .msg.me').count(), 'question(s) shown |', (await ph.inner_text('#chatLog .msg.ai >> nth=-1'))[:40], '| errors left:', await ph.locator('#chatLog .msg.err').count())
+    AI['mode']='missing'
     await ph.click('[data-act=close]'); await ph.wait_for_timeout(300)
     # ask
     await ph.evaluate("window.__aiMode='ok'; window.__aiCalls=[]"); AI['mode']='ok'; await ph.click('[data-act=ask]'); await ph.wait_for_timeout(300)
