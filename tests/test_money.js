@@ -101,5 +101,27 @@ l2[0].paid = true; r2.push({id: 'bnew', name: 'Meralco', a: 2000, due: '2026-12-
 const m2 = M.merge3('meta', {bills: base2}, {bills: l2}, {bills: r2}).bills;
 eq('paid here + added there: both kept', [m2.length, m2.find(b => b.name === 'SPayLater').paid], [3, true]);
 
+/* why this month is different */
+const drv = M.monthDrivers({Food: 9000, Shopping: 12000, Transport: 2000}, [{Food: 8800, Shopping: 3000, Transport: 2100}, {Food: 9200, Shopping: 3000, Transport: 1900}], 500);
+eq('drivers: only real changes, biggest first', drv.map(d => [d.cat, d.delta]), [['Shopping', 9000]]);
+eq('drivers: a category that stopped shows as a drop', M.monthDrivers({}, [{Games: 1500}], 500).map(d => d.delta), [-1500]);
+
+/* goal coach: cuts and how many months sooner */
+const months = p => Math.ceil(60000 / p);    // ₱60k to go, no interest
+const cc = M.coachCuts({Food: 9000, Shopping: 4000, Other: 500}, 5000, months);
+eq('coach: base months', cc.base, 12);
+eq('coach: small categories left out', cc.cuts.some(x => x.cat === 'Other'), false);
+eq('coach: biggest gain first (Food 20% = ₱1,800 → 9 months, 3 sooner)', [cc.cuts[0].cat, cc.cuts[0].cut, cc.cuts[0].months, cc.cuts[0].sooner], ['Food', 1800, 9, 3]);
+eq('coach: nothing saved yet → months from the cut alone', M.coachCuts({Food: 9000}, 0, p => p > 0 ? Math.ceil(60000 / p) : Infinity).cuts[0].sooner, null);
+
+/* Sunday check-in */
+eq('week runs Monday to Sunday', M.weekRange('2026-11-29'), {from: '2026-11-23', to: '2026-11-29'});
+const wr = [];
+for (let w = 0; w < 5; w++) wr.push({d: M.addDays('2026-11-25', -7 * w), a: 2000, c: 'Food'});
+wr.push({d: '2026-11-27', a: 1500, c: 'Shopping'});
+const rc = M.weekRecap(wr, '2026-11-29', 4);
+eq('week: spent vs usual week', [rc.spent, rc.usual], [3500, 2000]);
+eq('week: what ran over', [rc.top[0].cat, rc.top[0].over], ['Shopping', 1500]);
+
 console.log('errors', JSON.stringify(errors));
 process.exit(errors.length ? 1 : 0);

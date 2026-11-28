@@ -171,6 +171,31 @@
     return added;
   }
 
-  const api = {billId, ensureBillIds, DAYMS, iso, mkDate, dnum, addDays, daysBetween, billMonth, tdPayouts, carvePlan, paySlots, paydaysUntil, amort, loanLeft, detectSubs, J, pick, mergeById, merge3};
+  /* ---- why this month is different: category totals now vs the average of earlier months ---- */
+  function monthDrivers(now, past, minDelta) {
+    const cats = new Set([...Object.keys(now || {}), ...past.flatMap(o => Object.keys(o))]), n = past.length || 1, out = [];
+    cats.forEach(c => { const v = +(now || {})[c] || 0, u = past.reduce((s, o) => s + (+o[c] || 0), 0) / n, d = v - u; if (Math.abs(d) >= (minDelta || 500)) out.push({cat: c, now: v, usual: u, delta: d}); });
+    return out.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  }
+  /* ---- goal coach: what each category cut does to the months a goal takes. months(pmt) is the goal's own maths ---- */
+  function coachCuts(cats, pmt, months, steps) {
+    const base = months(pmt), out = [];
+    Object.entries(cats).filter(([, v]) => v >= 1000).sort((a, b) => b[1] - a[1]).slice(0, 4).forEach(([cat, avg]) => (steps || [0.1, 0.2]).forEach(f => {
+      const cut = Math.max(100, Math.round(avg * f / 100) * 100), n = months(pmt + cut);
+      out.push({cat, avg, cut, share: f, months: n, sooner: isFinite(base) ? base - n : null});
+    }));
+    return {base, cuts: out.sort((a, b) => (b.sooner ?? 1e9) - (a.sooner ?? 1e9) || a.cut - b.cut)};
+  }
+  /* ---- the week so far (Monday to Sunday) and the usual week ---- */
+  function weekRange(t) { const d = new Date(dnum(t)), wd = (d.getDay() + 6) % 7; const from = addDays(t, -wd); return {from, to: addDays(from, 6)}; }
+  function weekRecap(rows, t, weeks) {
+    const {from, to} = weekRange(t), sum = (a, b) => rows.filter(r => r.d >= a && r.d <= b).reduce((s, r) => s + r.a, 0), k = weeks || 4;
+    const spent = sum(from, to), prev = []; for (let w = 1; w <= k; w++) prev.push(sum(addDays(from, -7 * w), addDays(to, -7 * w)));
+    const byCat = {}, usualCat = {}; rows.forEach(r => { if (r.d >= from && r.d <= to) byCat[r.c] = (byCat[r.c] || 0) + r.a; else if (r.d >= addDays(from, -7 * k) && r.d < from) usualCat[r.c] = (usualCat[r.c] || 0) + r.a / k; });
+    const usual = prev.reduce((s, v) => s + v, 0) / k, top = Object.entries(byCat).map(([c, v]) => ({cat: c, now: v, usual: usualCat[c] || 0, over: v - (usualCat[c] || 0)})).sort((a, b) => b.over - a.over);
+    return {from, to, spent, usual, top};
+  }
+
+  const api = {monthDrivers, coachCuts, weekRange, weekRecap, billId, ensureBillIds, DAYMS, iso, mkDate, dnum, addDays, daysBetween, billMonth, tdPayouts, carvePlan, paySlots, paydaysUntil, amort, loanLeft, detectSubs, J, pick, mergeById, merge3};
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PeraMoney = api;
 })(typeof window !== 'undefined' ? window : globalThis);

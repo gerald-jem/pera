@@ -15,6 +15,14 @@ window.__mockInvoke = async (name, {body}) => {
     const guess = n => /grab|angkas|joyride/i.test(n) ? 'Transport' : /panda|jollibee|mcdo/i.test(n) ? 'Food & drinks' : /sent to|instapay/i.test(n) ? 'Transfers' : /steam|netflix/i.test(n) ? 'Subscriptions & games' : 'Other';
     return {data: {text: JSON.stringify(notes.map(([n, t]) => ({n, category: guess(t), name: t.split(/[ *-]+/).filter(w => w.length > 2)[1] || t})))}};
   }
+  if (body.task === 'query') {
+    const q = last.match(/Question: (.*)/)?.[1] || '';
+    if (/shopee/i.test(q)) return {data: {text: JSON.stringify({kind: 'total', match: 'shopee', type: 'spent', from: '2026-09-01', to: '2026-09-30', group: 'none'})}};
+    if (/food/i.test(q) && /per month/i.test(q)) return {data: {text: JSON.stringify({kind: 'total', match: '', category: 'Food & drinks', type: 'spent', from: '2026-08-01', to: '2026-10-31', group: 'month'})}};
+    return {data: {text: JSON.stringify({kind: 'other'})}};
+  }
+  if (body.task === 'why') return {data: {text: 'Shopping was the big jump, mostly one Lazada order.\nTry a ₱3,000 shopping limit next month.'}};
+  if (body.task === 'coach') return {data: {text: 'Cut Food by ₱1,500 a month and you reach it 2 months sooner.\nThen trim Shopping by ₱1,000.'}};
   if (body.task === 'talk') return {data: {text: JSON.stringify([
     {type: 'exp', amount: 550, note: 'Grab', date: '2026-11-27', category: 'Transport'},
     {type: 'exp', amount: 180, note: 'Jollibee', date: '2026-11-27', category: 'Food & drinks'},

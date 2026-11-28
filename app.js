@@ -294,7 +294,7 @@ function renderHome(ser) {
   const prev = ser[ser.indexOf(cur) - 1];
   if (prev) { const d = cur.total - prev.total; $('homeChg').innerHTML = `<span class="${d >= 0 ? 'up' : 'dn'}">${d >= 0 ? '▲' : '▼'} ${esc(peso(Math.abs(d)))}</span> vs ${esc(M[prev.i])}`; }
   else $('homeChg').textContent = '';
-  homeMonth(cur, prev); yearCard(); plan13Card(); homeFlow(); homeBills(); homeNotes(cur, ser); homeSummary(); applyHomeHide();
+  homeMonth(cur, prev); yearCard(); plan13Card(); homeFlow(); homeBills(); homeNotes(cur, ser); homeSummary(); homeWeek(); applyHomeHide();
   $('homeList').innerHTML = '';
   const ml = $('homeMonthLink'); ml.hidden = false; ml.dataset.y = cur.y; ml.dataset.i = cur.i;
   ml.textContent = `See all of ${M[cur.i]}’s entries →`;
@@ -384,7 +384,7 @@ function pisoAdded(kind, a, note) {
 }
 
 /* ---- Customise Home: hide cards you don't use (this device) ---- */
-const HOME_CARDS = [['left', 'Left to spend until payday', '.leftbox'], ['hFlow', 'Income vs spending', '#hFlow'], ['hBills', 'Coming up (bills)', '#hBills'], ['hNotes', 'Insights', '#hNotes'], ['hSum', 'AI monthly summary', '#hSum'], ['h13', '13th month plan (Nov–Jan)', '#h13'], ['hYear', 'Year in review (Dec–Jan)', '#hYear']];
+const HOME_CARDS = [['hWeek', 'Sunday check-in', '#hWeek'], ['left', 'Left to spend until payday', '.leftbox'], ['hFlow', 'Income vs spending', '#hFlow'], ['hBills', 'Coming up (bills)', '#hBills'], ['hNotes', 'Insights', '#hNotes'], ['hSum', 'AI monthly summary', '#hSum'], ['h13', '13th month plan (Nov–Jan)', '#h13'], ['hYear', 'Year in review (Dec–Jan)', '#hYear']];
 const homeHidden = () => new Set(store.get('pera:homeHide') || []);
 function applyHomeHide() { const h = homeHidden(); HOME_CARDS.forEach(([k, , sel]) => document.querySelectorAll(sel).forEach(el => el.classList.toggle('userhid', h.has(k)))); }
 
@@ -430,7 +430,8 @@ function leftHTML() {
     <b class="lv">${over ? '−' : ''}${esc(peso(Math.abs(L.left)))}</b>
     <span class="ls">${over ? 'over this pay period’s budget' : `about <b>${esc(peso(Math.max(0, L.perDay)))}</b> a day for ${L.days} day${L.days === 1 ? '' : 's'}`}</span>
     <span class="pbar thin"><b style="width:${pct.toFixed(1)}%"></b></span>
-    <span class="ls muted">${esc(peso(L.spent))} spent of ${esc(peso(L.budget))} since ${esc(md(L.start))} · ${L.own ? 'your cap' : 'suggested cap'}, bills and savings not counted · tap to see what counted</span></button>`;
+    <span class="ls muted">${esc(peso(L.spent))} spent of ${esc(peso(L.budget))} since ${esc(md(L.start))} · ${L.own ? 'your cap' : 'suggested cap'}, bills and savings not counted · tap to see what counted</span></button>
+    <button class="ghost afbtn" data-act="afford">Can I afford something?</button>`;
 }
 function capSheet() {
   const P = planNumbers(); if (!P) return toast('Pera needs two finished months to suggest a cap.');
@@ -1015,6 +1016,7 @@ function goalSheet(id, editing) {
       ${c.pmt ? `<div class="gplan"><span>Saving ${esc(peso(c.pmt))} a month</span><b>${isFinite(c.nAt) ? esc(inMonths(c.nAt)) : 'Not reachable'}</b><small>${spanTxt(c.nAt)}${affTxt(c.pmt) ? ' · ' + affTxt(c.pmt) : ''}</small></div>` : ''}
       ${h.save > 0 ? `<div class="gplan"><span>At your usual pace (${esc(peso(h.save))} saved a month)</span><b>${isFinite(c.nUsual) ? esc(inMonths(c.nUsual)) : 'Not reachable'}</b><small>${spanTxt(c.nUsual)} · average of your last ${h.n} months</small></div>` : ''}
     </div>
+    ${coachHTML(g)}
     <h3>If you save each month…</h3>
     <table class="gtable"><thead><tr><th>A month</th><th>You reach it</th><th>Takes</th></tr></thead><tbody>
       ${amts.map(x => { const n = gMonths(c.cur, c.target, x, c.r), a = afford(x); return `<tr${g.by && n <= c.nBy ? ' class="ok"' : ''}><td>${esc(peso(x))}${a != null ? `<small class="${a > 100 ? 'dn' : ''}">${a}% of your room</small>` : ''}</td><td>${isFinite(n) ? esc(inMonths(n)) : '—'}</td><td>${spanTxt(n)}</td></tr>`; }).join('')}
@@ -1835,6 +1837,75 @@ function paintChat(thinking) {
   }
   log.scrollIntoView({block: 'end'}); $('sheet').scrollTop = $('sheet').scrollHeight;
 }
+/* ---- exact totals: the AI only turns the question into a search; Pera adds up the real entries ---- */
+const TOTAL_Q = /\b(how much|magkano|total|nagastos|gastos|ilan)\b/i, NOT_TOTAL = /\b(should|cap|afford|budget|save each|kaya ko|pwede ba|plan|reach|goal)\b/i;
+function exactSearch(pl) {
+  const rows = [], words = String(pl.match || '').toLowerCase().split(/\s+/).filter(w => w.length > 1), cat = CAT_NAMES.includes(pl.category) ? pl.category : '';
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(pl.from) ? pl.from : '0000-01-01', to = /^\d{4}-\d{2}-\d{2}$/.test(pl.to) ? pl.to : todayIso(), kind = pl.type === 'received' ? 'inc' : 'exp';
+  for (const y of Object.keys(S.years)) S.years[y].forEach((m, i) => (m[kind] || []).forEach(x => {
+    const d = x.d || `${y}-${String(i + 1).padStart(2, '0')}-15`; if (d < from || d > to || !(+x.a > 0)) return;
+    const n = x.n || '', c = x.c && CAT_NAMES.includes(x.c) ? x.c : catOf(n), hay = (n + ' ' + (merchantOf(n) || '')).toLowerCase();
+    if (cat && kind === 'exp' && c !== cat) return;
+    if (words.length && !words.every(w => hay.includes(w))) return;
+    rows.push({d, n, a: +x.a, c, shop: merchantOf(n) || showName(n) || 'No description'});
+  }));
+  rows.sort((a, b) => b.a - a.a);
+  const total = rows.reduce((s, r) => s + r.a, 0), groups = {};
+  if (pl.group && pl.group !== 'none') rows.forEach(r => { const k = pl.group === 'month' ? r.d.slice(0, 7) : pl.group === 'shop' ? r.shop : r.c; groups[k] = (groups[k] || 0) + r.a; });
+  return {rows, total, groups, from, to, kind, cat, words};
+}
+function exactText(pl, R) {
+  const md = d => fmtDate(d, {month: 'short', day: 'numeric', year: 'numeric'}), what = [R.words.length ? `“${pl.match}”` : '', R.cat].filter(Boolean).join(' in ');
+  const head = R.rows.length ? `**${peso(R.total, 2)}** ${R.kind === 'inc' ? 'received' : 'spent'}${what ? ` on ${what}` : ''} from ${md(R.from === '0000-01-01' ? R.rows.map(r => r.d).sort()[0] : R.from)} to ${md(R.to)}: ${R.rows.length} entr${R.rows.length === 1 ? 'y' : 'ies'}.`
+    : `No ${R.kind === 'inc' ? 'money in' : 'spending'}${what ? ` on ${what}` : ''} from ${md(R.from)} to ${md(R.to)}.`;
+  const g = Object.entries(R.groups).sort((a, b) => R.kind && pl.group === 'month' ? a[0].localeCompare(b[0]) : b[1] - a[1]).slice(0, 8)
+    .map(([k, v]) => `- ${pl.group === 'month' ? new Date(+k.slice(0, 4), +k.slice(5) - 1).toLocaleDateString('en-PH', {month: 'long', year: 'numeric'}) : k}: ${peso(v, 2)}`);
+  const top = R.rows.slice(0, 6).map(r => `- ${fmtDate(r.d, {month: 'short', day: 'numeric'})} · ${showName(r.n) || 'No description'}: ${peso(r.a, 2)}`);
+  const incl = !R.cat && R.kind === 'exp' && R.rows.some(r => r.c === 'Transfers') ? `\nIncludes ${peso(R.rows.filter(r => r.c === 'Transfers').reduce((s, r) => s + r.a, 0), 2)} in transfers.` : '';
+  return `${head}${incl}${g.length ? '\n\n' + g.join('\n') : ''}${R.rows.length ? `\n\n${R.rows.length > 6 ? 'Biggest ones:' : 'Entries:'}\n${top.join('\n')}` : ''}\n\n*(Counted by Pera from your entries.)*\n>> ${R.words.length ? `${pl.match} last month?` : 'What about last month?'} | Where can I cut back?`;
+}
+async function exactAnswer(q) {
+  const L = leftToSpend(), pay = L ? L.start : todayIso();
+  const pl = await aiQueue('Ask Pera', () => aiJSON('query', {system: 'You turn a money question into a search. Reply with JSON only.', maxTokens: 400, think: 'low',
+    messages: [{role: 'user', text: `Today is ${todayIso()}. They're paid on the 15th and 30th; the last payday was ${pay}. Categories: ${CAT_NAMES.join(', ')}.\nQuestion: ${q}\nIf it asks for a total or a list of their own spending or money received (by shop, note words, category or period), kind = "total"; otherwise kind = "other". match = shop or note words to look for ('' if none, e.g. "shopee", "grab"). category only if they name one of the categories. type = "spent" or "received". from/to = inclusive dates (YYYY-MM-DD); "September" = that whole month (the latest one not in the future); "since payday" = from ${pay}; no period = the current month. group = "month" if they ask per month, "shop" for per shop, "category" for per category, else "none".`}],
+    schema: {type: 'OBJECT', properties: {kind: {type: 'STRING', enum: ['total', 'other']}, match: {type: 'STRING'}, category: {type: 'STRING'}, type: {type: 'STRING', enum: ['spent', 'received']}, from: {type: 'STRING'}, to: {type: 'STRING'}, group: {type: 'STRING', enum: ['none', 'month', 'shop', 'category']}}, required: ['kind']}}),
+    st => { chatState = st; paintChat(true); });
+  if (!pl || pl.kind !== 'total') return null;
+  return exactText(pl, exactSearch(pl));
+}
+
+/* ---- can I afford this? Pera decides; the AI only words it in chat ---- */
+function affordCheck(amount) {
+  const L = leftToSpend(), P = L && L.P; if (!L || !(amount > 0)) return null;
+  const md = d => fmtDate(d, {month: 'short', day: 'numeric'}), usualDay = L.budget / 15, after = L.left - amount, perDay = after / L.days;
+  const pays = paydayData(P.base, P.target, P.cap), nextBudget = pays.length ? pays[0].usual : P.cap / 2, t0 = todayIso(), bills = (S.meta.bills || []).filter(b => !b.paid && b.due && b.due >= t0 && b.due < L.next).reduce((s, b) => s + (+b.a || 0), 0);
+  let v, why;
+  if (amount <= L.left && perDay >= usualDay * 0.5) { v = 'yes'; why = `It fits. You’d still have ${peso(after)} until ${md(L.next)}, about ${peso(perDay)} a day.`; }
+  else if (amount <= L.left) { v = 'yesbut'; why = `It fits, but leaves only ${peso(after)} until ${md(L.next)}: about ${peso(Math.max(0, perDay))} a day for ${L.days} day${L.days === 1 ? '' : 's'}.`; }
+  else if (amount <= Math.max(0, L.left) + nextBudget * 0.5) { v = 'wait'; why = `Not from this pay period${L.left < 0 ? ' (it’s already over)' : ` (only ${peso(Math.max(0, L.left))} left)`}. Wait for payday on ${md(L.next)}${amount / nextBudget >= 0.05 ? `; it would take ${Math.round(amount / nextBudget * 100)}% of that period’s budget` : ''}.`; }
+  else { const per = Math.max(500, Math.round(nextBudget * 0.25 / 100) * 100), n = Math.ceil(amount / per); v = 'save'; why = `Too big for one pay period. Set aside ${peso(Math.ceil(amount / n))} each payday and it’s ready in ${n} paydays (about ${Math.ceil(n / 2)} month${Math.ceil(n / 2) === 1 ? '' : 's'}).`; }
+  const fundDue = (() => { const per = Math.max(500, Math.round(nextBudget * 0.25 / 100) * 100), n = Math.max(1, Math.ceil(amount / per)), d = new Date(today().getFullYear(), today().getMonth() + Math.ceil(n / 2) + 1, 1); return iso(d).slice(0, 7); })();
+  return {v, why, amount, after, bills, fundDue, mood: {yes: 'cheer', yesbut: 'calm', wait: 'worried', save: 'calm'}[v], label: {yes: 'Yes, go for it', yesbut: 'Yes, but it’s tight', wait: 'Better to wait', save: 'Save up for it'}[v]};
+}
+function affordLines(q) {
+  const a = amtIn(q) || (() => { const m = /(\d[\d,]*(?:\.\d+)?)\s*(k)?\b/i.exec(q); return m ? parseFloat(m[1].replace(/,/g, '')) * (m[2] ? 1000 : 1) : 0; })(), r = affordCheck(a);
+  return r ? `\n\nPera's affordability check for ${Math.round(a)} (exact, use it as the verdict): ${r.label}. ${r.why}${r.bills ? ` Bills due before the next payday: ${Math.round(r.bills)}.` : ''} If it isn't "yes", mention they can make it a "Set aside for" fund.` : '';
+}
+function affordSheet(pre) {
+  openSheet(`<div class="sheethead"><h2>Can I afford it?</h2><button type="button" class="ghost" data-act="close">Close</button></div>
+    <div class="hlgrid"><div><label for="afAmt">How much</label><input id="afAmt" inputmode="decimal" placeholder="6000" value="${pre ? Math.round(pre) : ''}"></div><div><label for="afWhat">For</label><input id="afWhat" maxlength="40" placeholder="Games"></div></div>
+    <div id="afOut" aria-live="polite"><p class="muted">Pera checks it against what’s left until payday, bills before then and your goals.</p></div>`, () => {
+    const go = () => {
+      const a = +($('afAmt').value || '').replace(/[^\d.]/g, ''), r = affordCheck(a), what = $('afWhat').value.trim();
+      if (!r) { $('afOut').innerHTML = '<p class="muted">Pera checks it against what’s left until payday, bills before then and your goals.</p>'; return; }
+      $('afOut').innerHTML = `<div class="afv af-${r.v}">${pisoOn() ? pisoSVG(r.mood, 56) : ''}<div><b>${esc(r.label)}</b><p>${esc(r.why)}</p>${r.bills ? `<p class="muted">${esc(peso(r.bills))} in bills is due before payday, already set apart.</p>` : ''}</div></div>
+        ${r.v !== 'yes' ? `<button class="go" data-act="af-fund" data-a="${Math.round(a)}" data-n="${esc(what || 'Something I want')}" data-due="${r.fundDue}">Make it a “Set aside for” fund</button>` : ''}
+        <button class="ghost" data-act="af-ask" data-q="${esc(`Can I afford ₱${Math.round(a).toLocaleString('en-PH')}${what ? ' for ' + what : ''}?`)}" style="width:100%;margin-top:8px">Ask Pera about it</button>`;
+    };
+    $('afAmt').addEventListener('input', go); $('afWhat').addEventListener('input', go); go(); setTimeout(() => $('afAmt').focus(), 60);
+  });
+}
+
 async function askPera(q, again, fresh) {
   if (chatBusy) return;
   if (!again) chat.push({role: 'user', text: q});
@@ -1843,10 +1914,16 @@ async function askPera(q, again, fresh) {
   if (first && !fresh && cache[ck]) { chat.push({role: 'model', text: cache[ck].text, cached: true}); paintChat(); return; }
   chatBusy = Date.now(); paintChat(true);
   clearInterval(chatTick); chatTick = setInterval(() => { if (chatBusy && !chat.some(m => m.live)) paintChat(true); }, 1000);
+  // "how much on Shopee in September?": Pera counts the real entries
+  if (TOTAL_Q.test(q) && !NOT_TOTAL.test(q)) {
+    try { const t = await exactAnswer(q); if (t) { chat.push({role: 'model', text: t, exact: true}); chatBusy = 0; chatState = null; clearInterval(chatTick); return paintChat(); } }
+    catch (e) { chatState = null; }   // couldn't read the question as a search: answer it the normal way
+  }
+  const affordQ = /afford|can i (buy|get|spend)|is (that|it) ok|pwede ba|kaya ko|should i (buy|get)/i.test(q) ? affordLines(q) : '';
   const needRows = /\b(spent|spend|spending|bought|paid|grab|jollibee|shopee|lazada|food|transaction|entry|entries|where|which|list|biggest|most|cut|save|saving|savings|improve)/i.test(q);
   const msgs = chat.filter(m => !m.err).slice(-12).map(m => ({role: m.role, text: m.text})), live = {role: 'model', text: '', live: true};
   try {
-    const text = await aiQueue('Ask Pera', job => aiStream('ask', {system: AI_RULES + FOLLOW_RULE + '\n\nThe person’s data:\n' + aiContext({entries: needRows}), messages: msgs, maxTokens: 3000, think: 'low'}, t => {
+    const text = await aiQueue('Ask Pera', job => aiStream('ask', {system: AI_RULES + FOLLOW_RULE + '\n\nThe person’s data:\n' + aiContext({entries: needRows}) + affordQ, messages: msgs, maxTokens: 3000, think: 'low'}, t => {
       job.partial = true; chatState = null;
       if (!chat.includes(live)) chat.push(live);
       live.text = t; paintChat();
@@ -1920,12 +1997,78 @@ function applySort() {
 function summaryMonth() { const t = today(); return t.getDate() >= 25 ? {y: String(t.getFullYear()), i: t.getMonth()} : (d => ({y: String(d.getFullYear()), i: d.getMonth()}))(new Date(t.getFullYear(), t.getMonth() - 1, 1)); }
 const ym = () => { const t = today(); return `${t.getFullYear()}-${t.getMonth()}`; };
 const NO_FLUFF = 'Friendly, no headings, no greeting, no disclaimers, no advice to see a professional.';
+/* ---- spending rows, with categories, for the month / week / goal maths (transfers left out: part of them is savings) ---- */
+function spendRows() {
+  const out = [];
+  for (const y of Object.keys(S.years)) S.years[y].forEach((m, i) => (m.exp || []).forEach(x => { if (!(+x.a > 0)) return; const c = catOfX(x); if (c === 'Transfers') return; out.push({d: x.d || `${y}-${String(i + 1).padStart(2, '0')}-15`, a: +x.a, c, n: x.n || ''}); }));
+  return out;
+}
+const catsOf = (rows, y, i) => { const k = `${y}-${String(+i + 1).padStart(2, '0')}`, o = {}; rows.forEach(r => { if (r.d.slice(0, 7) === k) o[r.c] = (o[r.c] || 0) + r.a; }); return o; };
+function whyData(y, i) {
+  const rows = spendRows(), past = [];
+  for (let k = 1; k <= 6 && past.length < 3; k++) { const d = new Date(+y, +i - k, 1), o = catsOf(rows, d.getFullYear(), d.getMonth()); if (Object.keys(o).length) past.push(o); }
+  if (past.length < 2) return null;
+  const now = catsOf(rows, y, i), key = `${y}-${String(+i + 1).padStart(2, '0')}`, drivers = PM.monthDrivers(now, past, 500).slice(0, 4);
+  drivers.forEach(dv => { dv.top = rows.filter(r => r.d.slice(0, 7) === key && r.c === dv.cat).sort((a, b) => b.a - a.a).slice(0, 2); });
+  const tot = o => Object.values(o).reduce((s, v) => s + v, 0);
+  return {now: tot(now), usual: past.reduce((s, o) => s + tot(o), 0) / past.length, n: past.length, drivers};
+}
+function whyHTML(y, i) {
+  const W = whyData(y, i); if (!W || !W.drivers.length) return '';
+  const max = Math.max(...W.drivers.map(d => Math.abs(d.delta))), dlt = W.now - W.usual;
+  return `<section class="card whycard"><h3>What changed in ${M[+i]}</h3>
+    <p class="muted">${esc(peso(W.now))} spent, ${esc(peso(Math.abs(dlt)))} ${dlt >= 0 ? 'more' : 'less'} than your usual ${esc(peso(W.usual))} (average of the ${W.n} months before; transfers not counted).</p>
+    <ul class="whylist">${W.drivers.map(d => `<li><span>${esc(d.cat)}</span><span class="whybar"><i class="${d.delta > 0 ? 'dn' : 'up'}" style="width:${Math.max(6, Math.abs(d.delta) / max * 100).toFixed(0)}%"></i></span><b class="${d.delta > 0 ? 'dn' : 'up'}">${d.delta > 0 ? '+' : '−'}${esc(peso(Math.abs(d.delta)))}</b>${d.delta > 0 && d.top[0] ? `<small>biggest: ${esc(showName(d.top[0].n) || 'no description')} ${esc(peso(d.top[0].a))}</small>` : ''}</li>`).join('')}</ul>
+    ${aiCardHTML(`why|${y}|${i}`, 'whyai')}</section>`;
+}
+// goal coach: Pera works out what each cut does; the AI only picks the 2–3 easiest
+function coachData(g) {
+  const c = goalCalc(g); if (c.done) return null;
+  const rows = spendRows(), t = today(), avg = {}; let n = 0;
+  for (let k = 1; k <= 3; k++) { const d = new Date(t.getFullYear(), t.getMonth() - k, 1), o = catsOf(rows, d.getFullYear(), d.getMonth()); if (!Object.keys(o).length) continue; n++; Object.entries(o).forEach(([k2, v]) => avg[k2] = (avg[k2] || 0) + v); }
+  if (!n) return null; Object.keys(avg).forEach(k => { avg[k] /= n; }); delete avg['Bills & PayLater'];
+  const pmt = c.pmt || c.h.save || 0, R = PM.coachCuts(avg, pmt, x => gMonths(c.cur, c.target, x, c.r));
+  return {c, pmt, base: R.base, cuts: R.cuts.filter(x => x.sooner == null || x.sooner > 0)};
+}
+function coachHTML(g) {
+  const D = coachData(g); if (!D || !D.cuts.length) return '';
+  const best = []; D.cuts.forEach(x => { if (best.length < 4 && !best.some(b => b.cat === x.cat)) best.push(x); });
+  return `<h3>Ways to get there sooner</h3><ul class="coachlist">${best.map(x => `<li><span>Spend ${esc(peso(x.cut))} less a month on ${esc(x.cat)}<small>usually ${esc(peso(x.avg))}</small></span><b>${x.sooner == null ? esc(spanTxt(x.months)) : `${x.sooner} month${x.sooner === 1 ? '' : 's'} sooner`}</b></li>`).join('')}</ul>
+    <p class="muted">${D.pmt ? `Counted on top of ${esc(peso(D.pmt))} a month` : 'Counted as the only money going in'}, moved to this goal.</p>${aiCardHTML(`coach|${g.id}`, 'whyai')}`;
+}
+// Sunday check-in: this week against the usual week, what's coming, one thing to do
+function weekData() {
+  const t = todayIso(), rows = spendRows(), R = PM.weekRecap(rows, t, 4), nx = addDays(R.to, 7), md = d => fmtDate(d, {weekday: 'short', month: 'short', day: 'numeric'});
+  const bills = (S.meta.bills || []).filter(b => !b.paid && b.due && b.due > t && b.due <= nx).sort((a, b) => a.due.localeCompare(b.due));
+  const P = planNumbers(), pay = P ? paydayData(P.base, P.target, P.cap).filter(x => x.date > t && x.date <= nx)[0] : null, o = R.top.find(x => x.over >= 300);
+  const action = bills[0] && (!pay || bills[0].due < pay.date) ? `Keep ${peso(+bills[0].a)} ready for ${bills[0].name} on ${md(bills[0].due)}.`
+    : pay ? `On payday (${md(pay.date)}), move ${peso(Math.round(pay.save))} to savings first.` : o ? `${o.cat} ran ${peso(o.over)} over a usual week. Go easy on it this week.` : 'A steady week. Keep it up.';
+  return {...R, bills, pay, action, over: o};
+}
+const isSunday = () => today().getDay() === 0;
+function homeWeek() {
+  const box = $('hWeek'); if (!box) return;
+  if (!isSunday() || store.get('pera:weekDone') === todayIso()) { box.hidden = true; box.innerHTML = ''; return; }
+  const W = weekData(), d = W.spent - W.usual, md = x => fmtDate(x, {month: 'short', day: 'numeric'});
+  box.hidden = false;
+  box.innerHTML = `<div class="inshead"><h2 class="sech">Your week</h2><button class="ghost" data-act="week-done" aria-label="Hide until next Sunday">Done</button></div>
+    <div class="weekrow">${pisoOn() ? pisoSVG(d > W.usual * 0.2 ? 'worried' : 'happy', 48) : ''}<div><b class="serif">${esc(peso(W.spent))}</b> <span class="muted">spent ${esc(md(W.from))} to ${esc(md(W.to))}</span>
+    <p class="muted">${W.usual > 0 ? `${esc(peso(Math.abs(d)))} ${d >= 0 ? 'more' : 'less'} than your usual week (${esc(peso(W.usual))})` : 'Your first week in Pera'}${W.over ? ` · most extra on ${esc(W.over.cat)}` : ''}</p></div></div>
+    ${W.bills.length || W.pay ? `<ul class="weeknext">${W.pay ? `<li><span>Payday</span><b>${esc(fmtDate(W.pay.date, {weekday: 'short', month: 'short', day: 'numeric'}))}</b></li>` : ''}${W.bills.slice(0, 3).map(b => `<li><span>${esc(b.name)}</span><b>${esc(peso(+b.a))} · ${esc(md(b.due))}</b></li>`).join('')}</ul>` : ''}
+    <p class="weekdo"><b>This week:</b> ${esc(W.action)}</p>
+    <button class="ghost" data-act="week-ask" style="width:100%">Talk it through with Piso</button>`;
+}
+
 function aiSpec(id) {
   const [kind, y, i] = String(id).split('|');
   if (kind === 'month') return {id, key: `sum:${y}-${i}`, title: `${M[+i]} in words`, intro: `A short recap of ${M[+i]}: what changed, and one or two things to try.`,
     prompt: () => `Data:\n${aiContext()}\n\nWrite a recap of ${M[+i]} ${y} in under 110 words. Three short parts: one line on how the month went (income, spending, what was kept); 2–3 bullets on the biggest changes against their usual months, with peso amounts; then one or two specific, doable tips. ${NO_FLUFF}`};
   if (kind === 'savings') return {id, key: `sav:${ym()}`, title: 'Savings check-in', intro: 'Where your savings and goals stand, whether your pace gets you there, and what to do next.',
     prompt: () => `Data:\n${aiContext()}\n\nWrite a savings check-in in under 110 words: one line on total savings now and how it grew; a bullet per goal (or per account if there are no goals) saying if the current pace reaches it on time, with peso amounts; then one concrete next step, like how much to move on each payday (15th and 30th). ${NO_FLUFF}`};
+  if (kind === 'why') return {id, key: `why:${y}-${i}`, title: 'Why it was different', done: 'Explained', intro: 'Pera found what changed. Get two lines on why, and one thing to try.', button: 'Explain it',
+    prompt: () => { const W = whyData(y, i) || {drivers: []}; return `${M[+i]} ${y}: spent ${Math.round(W.now)} against a usual ${Math.round(W.usual)} (average of ${W.n} earlier months, transfers not counted).\nWhat changed (exact, computed by Pera):\n${W.drivers.map(d => `- ${d.cat}: ${Math.round(d.now)} vs usual ${Math.round(d.usual)} (${d.delta > 0 ? '+' : ''}${Math.round(d.delta)})${d.top.length ? `; biggest: ${d.top.map(r => `${showName(r.n) || 'no description'} ${Math.round(r.a)} on ${r.d}`).join(', ')}` : ''}`).join('\n')}\n\nIn under 60 words: two short lines on why this month was different (name the categories, peso amounts and the biggest entries above; say if it looks like a one-off), then one practical suggestion for next month. Use only these numbers.`; }};
+  if (kind === 'coach') { const g = goals().find(x => x.id === y); return g && {id, key: `coach:${y}:${ym()}`, title: 'Your coach', done: 'Your coach picked', intro: 'Pera worked out what each cut does. Get the 2–3 easiest picks, explained.', button: 'Pick for me',
+    prompt: () => { const D = coachData(g) || {cuts: []}; return `Goal: ${g.name}, ${Math.round(D.c ? D.c.target : 0)} (has ${Math.round(D.c ? D.c.cur : 0)}). At ${Math.round(D.pmt)} a month it takes ${isFinite(D.base) ? D.base + ' months' : 'forever'}.\nCuts Pera checked (exact; avg = their usual month):\n${D.cuts.slice(0, 10).map(x => `- ${x.cat}: spend ${x.cut} less (usual ${Math.round(x.avg)}) → ${isFinite(x.months) ? x.months + ' months' : 'not reachable'}${x.sooner != null ? `, ${x.sooner} sooner` : ''}`).join('\n')}\n\nIn under 80 words, pick the 2–3 cuts that look easiest for the biggest gain (wants like food delivery, shopping and games before needs) and say in a line each how to make it happen, with the months saved. Use only these numbers.`; }}; }
   if (kind === 'bills') return {id, key: `bills:${ym()}`, title: 'Bills plan', intro: 'What your upcoming bills mean for each payday, and when you’ll be clear of them.',
     prompt: () => `Data:\n${aiContext()}\n\nWrite a bills plan in under 110 words: total still owed and when the last one ends (use the exact totals given, don’t add them up yourself); bullets for the heaviest upcoming month(s) with how much to set aside from each payday, using the payday each bill is paid from (a bill isn’t split across paydays that come after its due date); then one tip to get clear sooner or avoid piling up more PayLater. ${NO_FLUFF}`};
   return null;
@@ -1949,12 +2092,12 @@ function aiCardHTML(id, extraClass = 'hcard') {
   const btn = w ? `<span class="aiwriting"><span class="spin" aria-hidden="true"></span>${wait ? 'Waiting…' : 'Writing…'}</span>` : saved ? `<button class="plain" data-act="ai-card" data-id="${esc(id)}">Rewrite</button>` : '';
   const body = w ? (w.text ? `<div class="aitext">${aiHTML(w.text)}</div>` : `${saved ? `<div class="aitext faded">${aiHTML(saved.text)}</div>` : ''}${dots}`) + `<p class="muted aifoot">${esc(wait || 'Writing a fresh one…')}</p>`
     : saved ? `<div class="aitext">${aiHTML(saved.text)}</div>${stale ? `<p class="stalenote">Your numbers changed since this was written. <button class="linkbtn" data-act="ai-card" data-id="${esc(id)}">Rewrite</button></p>` : ''}<p class="muted aifoot">Written by AI ${esc(new Date(saved.at).toLocaleDateString('en-PH', {month: 'short', day: 'numeric'}))} · double-check the numbers</p>`
-    : `<p class="muted">${sp.intro} Uses Google Gemini.</p><button class="ghost wide" data-act="ai-card" data-id="${esc(id)}">${SPARK}Write it</button>`;
+    : `<p class="muted">${sp.intro} Uses Google Gemini.</p><button class="ghost wide" data-act="ai-card" data-id="${esc(id)}">${SPARK}${esc(sp.button || 'Write it')}</button>`;
   return `<section class="${extraClass} aicard" data-aikey="${esc(sp.key)}" data-aiid="${esc(id)}" aria-busy="${!!w}"><div class="hhead"><h2><span class="sparkic">${SPARK}</span>${esc(sp.title)}</h2>${btn}</div>${body}</section>`;
 }
 function paintAiCards(key) {
   document.querySelectorAll(`[data-aikey="${CSS.escape(key)}"]`).forEach(el => {
-    const cls = el.classList.contains('hcard') ? 'hcard' : 'card', id = el.id;
+    const cls = el.classList.contains('hcard') ? 'hcard' : el.classList.contains('whyai') ? 'whyai' : 'card', id = el.id;
     el.outerHTML = aiCardHTML(el.dataset.aiid, cls).replace('<section ', id ? `<section id="${id}" ` : '<section ');
   });
 }
@@ -1971,7 +2114,7 @@ async function writeAiCard(id) {
     const text = r.t;
     delete aiWriting[sp.key]; setPending(id, false);
     saveAiNote(sp.key, {text, at: Date.now(), fp: dataFP()});
-    paintAiCards(sp.key); toast(had ? `${sp.title} rewritten` : `${sp.title} written`);
+    paintAiCards(sp.key); toast(sp.done || (had ? `${sp.title} rewritten` : `${sp.title} written`));
   } catch (e) { delete aiWriting[sp.key]; setPending(id, false); paintAiCards(sp.key); toast(e.message); }
 }
 function homeSummary() {
@@ -2377,6 +2520,9 @@ function reminderList() {
   });
   const P = planNumbers();
   if (P) paydayData(P.base, P.target, P.cap).forEach(x => out.push({id: 'pd|' + x.date, date: x.date, title: 'Payday!', body: `Move ${peso(Math.round(x.save))} to savings first.${x.bt ? ` Bills from this pay: ${peso(Math.round(x.bt))}.` : ''} About ${peso(Math.max(0, Math.round(x.left)))} left to spend.`}));
+  // Sunday check-in, this coming Sunday (today if it's Sunday)
+  const sun = addDays(t, (7 - today().getDay()) % 7);
+  out.push({id: 'wk|' + sun, date: sun, title: 'Your week in Pera', body: 'See what you spent this week and what’s coming up.'});
   return out.filter(x => x.date >= addDays(t, -1));
 }
 let remindTimer = null;
@@ -2838,6 +2984,7 @@ function monthHTML(y, i, ser) {
     <div class="trio"><div class="tile"><span>Income</span><b class="up">${esc(peso(p.inc))}</b></div><div class="tile"><span>Spent</span><b class="dn">${esc(peso(p.exp))}</b></div><div class="tile"><span>Saved</span><b>${esc(peso(p.sav))}</b></div></div>
     <p class="muted">Total money at month end: <b style="color:var(--ink)">${esc(peso(p.total, 2))}</b></p>
     ${(S.years[y][i].inc.length || S.years[y][i].exp.length) ? aiCardHTML(`month|${y}|${i}`, 'card') : ''}
+    ${whyHTML(y, i)}
     <ul class="list">${entryRows(y, i) || '<li class="empty">No entries.</li>'}</ul>
     <button class="plain" data-act="add-dep-month" data-y="${esc(y)}" data-i="${i}">+ Add to savings</button>
     ${(S.years[y][i].inc.length || S.years[y][i].exp.length || +S.years[y][i].sav) ? `<button class="danger" data-act="month-clear" data-y="${esc(y)}" data-i="${i}">Clear ${M[i]}</button>` : ''}`;
@@ -3867,6 +4014,11 @@ document.addEventListener('click', e => {
     case 'ask': return askSheet();
     case 'ask-q': return askPera(d.q);
     case 'cap-set': return capSheet();
+    case 'afford': return affordSheet();
+    case 'week-done': store.set('pera:weekDone', todayIso()); return homeWeek();
+    case 'week-ask': { const W = weekData(); askSheet(); return askPera(`How did my week go (${W.from} to ${W.to})? What should I watch next week?`); }
+    case 'af-ask': closeSheet(); askSheet(); return askPera(d.q);
+    case 'af-fund': { closeSheet(); fundSheet(); setTimeout(() => { $('fnName').value = d.n; $('fnTarget').value = d.a; $('fnDue').value = d.due; }, 30); return; }
     case 'remind': return remindToggle();
     case 'remind-recheck': return remindRecheck(true);
     case 'home-card': { const h = homeHidden(); h.has(d.k) ? h.delete(d.k) : h.add(d.k); store.set('pera:homeHide', [...h]); applyHomeHide(); const b = $('sheetBody').querySelector(`[data-act=home-card][data-k="${d.k}"]`); if (b) b.setAttribute('aria-checked', String(!h.has(d.k))); return; }
