@@ -27,7 +27,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;min-he
 button:active{opacity:.6}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .serif,h1,h2,.big,.tile b{font-family:Literata,Georgia,"Times New Roman",serif;font-weight:600;letter-spacing:-.01em}
-.app{max-width:520px;margin:0 auto;min-height:100vh;padding:calc(env(safe-area-inset-top) + 12px) 18px calc(env(safe-area-inset-bottom) + 100px)}
+.app{max-width:520px;margin:0 auto;min-height:100vh;padding:calc(env(safe-area-inset-top) + 12px) 18px calc(env(safe-area-inset-bottom) + 130px)}
 h1{font-size:32px;line-height:1.05;margin:4px 0 14px}h2{font-size:20px;margin:26px 0 10px}
 .top{display:flex;justify-content:space-between;align-items:center;color:var(--mute);font-size:14px;min-height:44px}
 .top .ghost{font-size:14px}
@@ -443,3 +443,19 @@ html,body{touch-action:pan-x pan-y}
 .pweye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:44px;height:44px;min-height:0;padding:0;margin:0;border:0;background:none;color:var(--mute);display:grid;place-items:center;cursor:pointer;border-radius:10px}
 .pweye:active{transform:translateY(-50%) scale(.92)}.pweye:focus-visible{outline:2px solid var(--blue)}
 .pweye svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+/* ---- UX pass ---- */
+.topbtns{display:flex;align-items:center;gap:2px}
+.iconbtn{width:44px;height:44px;min-height:0;padding:0;display:grid;place-items:center}.iconbtn svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+/* close button always in reach on long sheets */
+.sheet .sheethead{position:sticky;top:-8px;z-index:4;background:var(--sheet);margin:0 -18px;padding:6px 18px;box-shadow:0 1px 0 var(--line)}
+.sheet.tall{height:92vh;max-height:92vh}
+/* day groups */
+.dayh{display:flex;justify-content:space-between;align-items:baseline;padding:14px 2px 4px!important;font-size:12px;font-weight:600;color:var(--mute);border:0!important}.dayh span:first-child{text-transform:uppercase;letter-spacing:.03em}.dayh span:last-child{font-variant-numeric:tabular-nums}
+.dayh b{font-weight:600}.dayh+li{border-top:0}
+.catdot2{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:1px}
+/* search */
+.srchbox{position:relative;margin:8px 0}.srchbox svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:20px;height:20px;fill:none;stroke:var(--mute);stroke-width:2;stroke-linecap:round}
+.srchbox input{padding-left:42px;font-size:17px}
+.srseg{margin-bottom:6px}.srseg button{font-size:13px}
+#monthDetail .trio .tile b,#sheetBody .trio .tile b{font-size:clamp(15px,4.6vw,19px);overflow:visible;text-overflow:clip;white-space:nowrap;letter-spacing:-.01em}@media (min-width:900px){#monthDetail .trio .tile b{font-size:clamp(14px,1.25vw,18px)}}

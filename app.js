@@ -385,15 +385,33 @@ function setEye() {
 }
 function entryRows(y, i) {
   const m = S.years[y][i];
-  const rows = [...m.inc.map(x => ['inc', x]), ...m.exp.map(x => ['exp', x])];
+  const rows = [...m.inc.map(x => ['inc', x]), ...m.exp.map(x => ['exp', x])]
+    .sort((a, b) => (b[1].d || '').localeCompare(a[1].d || '') || (a[0] === 'inc' ? -1 : 1));
+  let lastKey = null;
+  const dayHead = key => {
+    const list = rows.filter(([, x]) => (x.d || '') === key), out = list.filter(([t]) => t === 'exp').reduce((s, [, x]) => s + +x.a, 0), inn = list.filter(([t]) => t === 'inc').reduce((s, [, x]) => s + +x.a, 0);
+    return `<li class="dayh"><span>${key ? esc(new Date(dnum(key)).toLocaleDateString('en-PH', {weekday: 'short', month: 'short', day: 'numeric'})) : 'No exact day'}</span><span>${inn ? `<b class="up">+${esc(pesoS(inn))}</b> ` : ''}${out ? `−${esc(pesoS(out))}` : ''}</span></li>`;
+  };
   let h = rows.map(([t, x]) => {
+    const key = x.d || ''; const head = key !== lastKey ? dayHead(key) : ''; lastKey = key;
+    return head + entryRow(t, x, y, i);
+  }).join('');
+  const billRows = billsIn(y, i), depRows = potDepositsIn(y, i);
+  if (billRows.length || depRows.length || +m.sav) h += `<li class="dayh"><span>Bills & savings this month</span><span></span></li>`;
+  return h + billsAndSav(y, i, m);
+}
+function entryRow(t, x, y, i) {
+  {
     const inc = t === 'inc';
     return `<li><button class="rowbtn" data-act="edit-entry" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}">
       <span class="dot ${inc ? 'i' : 'e'}">${inc ? '↓' : '↑'}</span>
-      <span class="t">${esc(x.n || (inc ? 'Income' : 'Expense'))}<small>${inc ? 'Received' : x.a < 0 ? 'Refund / adjustment' : 'Sent'}${x.d ? ' · ' + esc(fmtDate(x.d, {month: 'short', day: 'numeric'})) : ''}</small></span>
+      <span class="t">${esc(x.n || (inc ? 'Income' : 'Expense'))}<small>${inc ? 'Received' : x.a < 0 ? 'Refund / adjustment' : (() => { const c = x.c || catOf(x.n || ''); return `<b class="catdot2" style="background:${catCol(c)}"></b>${esc(c)}`; })()}</small></span>
       <span class="amt ${inc ? 'up' : ''}">${inc ? '+' : x.a < 0 ? '+' : '−'}${esc(peso(Math.abs(x.a), 2))}</span></button>
       <button class="x" data-act="entry-del" data-t="${t}" data-y="${esc(y)}" data-i="${i}" data-id="${esc(x.id)}" aria-label="Delete ${esc(x.n || (inc ? 'income' : 'expense'))}">×</button></li>`;
-  }).join('');
+  }
+}
+function billsAndSav(y, i, m) {
+  let h = '';
   h += billsIn(y, i).map(b => `<li><button class="rowbtn" data-act="bill-edit" data-j="${b.j}"><span class="dot e">↑</span><span class="t">${esc(b.name)}<small>Bill due ${esc(fmtDate(b.due))}</small></span><span class="amt">−${esc(peso(+b.a, 2))}</span></button><span class="x" aria-hidden="true"></span></li>`).join('');
   h += potDepositsIn(y, i).map(({pot, d}) => `<li><button class="rowbtn" data-act="pot-open" data-p="${esc(pot.id)}"><span class="dot s">₱</span><span class="t">${esc(pot.name)}<small>Saved · ${esc(fmtDate(d.date, {month: 'short', day: 'numeric'}))}${d.date > todayIso() ? ' · planned' : ''} · not subtracted</small></span><span class="amt">${esc(peso(d.a, 2))}</span></button><span class="x" aria-hidden="true"></span></li>`).join('');
   if (+m.sav) h += `<li><button class="rowbtn" data-act="edit-sav" data-y="${esc(y)}" data-i="${i}"><span class="dot s">₱</span><span class="t">To savings${potDepositsIn(y, i).length ? ' (old entry)' : ''}<small>Subtracted from total</small></span><span class="amt">${esc(peso(+m.sav, 2))}</span></button>
@@ -1324,6 +1342,42 @@ function renderInsights(ser) {
   </div>`;
 }
 
+/* ================= search: every entry, bill and deposit, by words, amount or category ================= */
+let srch = {q: '', f: 'all'};
+function searchSheet() {
+  openSheet(`<div class="sheethead"><h2>Search</h2><button type="button" class="ghost" data-act="close">Done</button></div>
+    <div class="srchbox"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="srQ" type="search" enterkeyhint="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Grab, 550, food, salary…" aria-label="Search entries" value="${esc(srch.q)}"></div>
+    <div class="seg srseg">${[['all', 'All'], ['out', 'Money out'], ['in', 'Money in'], ['bill', 'Bills']].map(([k, l]) => `<button data-act="sr-f" data-k="${k}" aria-pressed="${srch.f === k}">${l}</button>`).join('')}</div>
+    <p class="muted" id="srSum"></p><ul class="list srlist" id="srList"></ul>`);
+  $('sheet').classList.add('tall');
+  const q = $('srQ'); q.addEventListener('input', () => { srch.q = q.value; runSearch(); }); runSearch(); setTimeout(() => q.focus(), 60);
+}
+function runSearch() {
+  const raw = srch.q.trim(), q = raw.toLowerCase(), num = /^[₱\s]*[\d,]+(\.\d+)?$/.test(raw) ? parseFloat(raw.replace(/[₱,\s]/g, '')) : null, res = [];
+  const hit = (text, a, cat) => !q || (num != null ? Math.abs(Math.abs(+a) - num) < 0.5 || String(Math.abs(+a)).startsWith(String(num)) : (text || '').toLowerCase().includes(q) || (cat || '').toLowerCase().includes(q) || (merchantOf(text || '') || '').toLowerCase().includes(q));
+  for (const y of Object.keys(S.years).sort().reverse()) for (let i = 11; i >= 0; i--) {
+    const m = S.years[y][i]; if (!m) continue;
+    if (srch.f !== 'bill') {
+      if (srch.f !== 'in') m.exp.forEach(x => { const c = x.c || catOf(x.n || ''); if (hit(x.n, x.a, c)) res.push({t: 'exp', x, y, i, c, d: x.d || `${y}-${String(i + 1).padStart(2, '0')}-00`}); });
+      if (srch.f !== 'out') m.inc.forEach(x => { if (hit(x.n, x.a, 'income')) res.push({t: 'inc', x, y, i, d: x.d || `${y}-${String(i + 1).padStart(2, '0')}-00`}); });
+    }
+  }
+  if (srch.f === 'all' || srch.f === 'bill' || srch.f === 'out') (S.meta.bills || []).forEach((b, j) => { if (hit(b.name, b.a, 'bills paylater')) res.push({t: 'bill', b, j, d: b.due}); });
+  res.sort((a, b) => b.d.localeCompare(a.d));
+  const out = res.filter(r => r.t !== 'inc').reduce((s, r) => s + Math.abs(+(r.x ? r.x.a : r.b.a)), 0), inn = res.filter(r => r.t === 'inc').reduce((s, r) => s + +r.x.a, 0);
+  $('srSum').innerHTML = !q && srch.f === 'all' ? 'Type a shop, note, amount or category. Newest first.' : res.length ? `<b>${res.length}</b> result${res.length === 1 ? '' : 's'}${out ? ` · <span class="dn">−${esc(peso(out, 2))}</span>` : ''}${inn ? ` · <span class="up">+${esc(peso(inn, 2))}</span>` : ''}` : `Nothing matches “${esc(raw)}”. Try fewer letters or an amount like 550.`;
+  let last = '', h = '';
+  for (const r of res.slice(0, 150)) {
+    const mk = r.t === 'bill' ? 'Bills' : `${M[r.i]} ${r.y}`;
+    if (mk !== last) { h += `<li class="dayh"><span>${esc(mk)}</span><span></span></li>`; last = mk; }
+    if (r.t === 'bill') { const b = r.b; h += `<li><button class="rowbtn" data-act="bill-edit" data-j="${r.j}"><span class="dot e">↑</span><span class="t">${esc(b.name)}<small>Bill due ${esc(fmtDate(b.due))}${b.paid ? ' · paid' : ''}</small></span><span class="amt">−${esc(peso(+b.a, 2))}</span></button></li>`; continue; }
+    const x = r.x, inc = r.t === 'inc';
+    h += `<li><button class="rowbtn" data-act="edit-entry" data-t="${r.t}" data-y="${esc(r.y)}" data-i="${r.i}" data-id="${esc(x.id)}"><span class="dot ${inc ? 'i' : 'e'}">${inc ? '↓' : '↑'}</span><span class="t">${esc(x.n || (inc ? 'Income' : 'Expense'))}<small>${x.d ? esc(fmtDate(x.d, {month: 'short', day: 'numeric'})) + ' · ' : ''}${inc ? 'Received' : `<b class="catdot2" style="background:${catCol(r.c)}"></b>${esc(r.c)}`}</small></span><span class="amt ${inc ? 'up' : ''}">${inc ? '+' : '−'}${esc(peso(Math.abs(x.a), 2))}</span></button></li>`;
+  }
+  if (res.length > 150) h += `<li class="empty">Showing the newest 150. Type more to narrow it down.</li>`;
+  $('srList').innerHTML = h;
+}
+
 /* ================= more reports (each in its own sheet) ================= */
 const REPORTS = [['trend', 'Spending trend', '▥'], ['cal', 'Spending calendar', '▦'], ['rate', 'Savings rate', '↗'], ['debt', 'PayLater payoff', '⏷']];
 let repState = {months: 6, cal: null};
@@ -1446,7 +1500,7 @@ function openSheet(html, onReady) {
   sheetMonth = null; sheetPot = null; sheetBill = null;
   $('sheetBody').innerHTML = html;
   $('scrim').classList.add('on'); $('sheet').classList.add('on'); document.body.classList.add('locked');
-  $('sheet').style.transform = ''; $('scrim').style.opacity = '';
+  $('sheet').style.transform = ''; $('scrim').style.opacity = ''; $('sheet').classList.remove('tall');
   if (!sheetOpen && !(history.state && history.state.peraSheet)) history.pushState({peraSheet: 1}, '');   // phone Back closes it
   sheetOpen = true;
   if (onReady) onReady($('sheetBody'));
@@ -1532,6 +1586,12 @@ function frequent(t) {
   return Object.values(by).filter(e => e.cnt >= 2).sort((a, b) => b.cnt - a.cnt || (a.d < b.d ? 1 : -1)).slice(0, 8)
     .map(e => { const s = e.amts.slice().sort((p, q) => p - q); return {...e, a: s[Math.floor((s.length - 1) / 2)]}; });   // usual amount
 }
+// notes you've used before, most used first (for suggestions while typing)
+function pastNotes() {
+  const by = {};
+  for (const y of Object.keys(S.years)) S.years[y].forEach(m => [...m.exp, ...m.inc].forEach(x => { if (x.n && x.n.length < 40) { const k = x.n.trim(); by[k] = (by[k] || 0) + 1; } }));
+  return Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 80).map(x => x[0]);
+}
 // a category picked for a merchant applies to its other payments too
 function rememberCat(n, c) {
   const m = merchantOf(n); if (!m || !c) return;
@@ -1570,12 +1630,12 @@ function entryForm(o) {
   openSheet(`<div class="sheethead"><h2 id="efTitle">${o.edit ? 'Edit' : 'Add'} ${T[t]}</h2><button type="button" class="ghost" data-act="close">Cancel</button></div>
     ${o.edit ? '' : `<div class="seg addseg">${[['exp', 'Expense'], ['inc', 'Income'], ['dep', 'Savings'], ['bill', 'Bill']].map(([k, l]) => `<button type="button" data-type="${k}" aria-pressed="${k === t}">${l}</button>`).join('')}</div>`}
     <form id="ef" novalidate>
-      ${o.edit ? '' : `<div data-for="exp inc" class="quick"><label for="fq">Type it</label><input id="fq" autocomplete="off" enterkeyhint="done" placeholder="150 jollibee yesterday"><div class="chips shortcuts" data-for="exp">${frequent('exp').map((f, k) => `<button type="button" class="chip" data-sc="exp" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div><div class="chips shortcuts" data-for="inc">${frequent('inc').map((f, k) => `<button type="button" class="chip" data-sc="inc" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div></div>`}
+      ${o.edit ? '' : `<div data-for="exp inc" class="quick"><label for="fq">Type it</label><input id="fq" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="150 jollibee yesterday"><div class="chips shortcuts" data-for="exp">${frequent('exp').map((f, k) => `<button type="button" class="chip" data-sc="exp" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div><div class="chips shortcuts" data-for="inc">${frequent('inc').map((f, k) => `<button type="button" class="chip" data-sc="inc" data-k="${k}">${esc(f.n)} <small>${esc(pesoS(f.a))}</small></button>`).join('')}</div></div>`}
       <div data-for="dep"><label for="fp">Savings account</label>${ps.length ? `<select id="fp">${ps.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>` : `<p class="note">You don’t have a savings account yet. <button type="button" class="ghost" data-act="pot-new">Add one</button></p>`}</div>
       <div data-for="bill"><label for="fbn">Bill</label><select id="fbn">${billNames.map(n => `<option>${esc(n)}</option>`).join('')}<option value="__other">Other…</option></select><input id="fbo" maxlength="40" placeholder="Name of the bill" hidden style="margin-top:8px"></div>
       <label for="fa">Amount (sums like 1.84+329 work)</label>
       <input id="fa" class="amtin" inputmode="decimal" autocomplete="off" enterkeyhint="done" value="${o.a != null ? esc(o.a) : ''}">
-      <div data-for="exp inc"><label for="fn">Note</label><input id="fn" maxlength="60" enterkeyhint="done" placeholder="Groceries, salary, bills…" value="${esc(o.n || '')}"></div>
+      <div data-for="exp inc"><label for="fn">Note</label><input id="fn" maxlength="60" enterkeyhint="done" autocomplete="off" autocorrect="off" spellcheck="false" list="fnList" placeholder="Groceries, salary, bills…" value="${esc(o.n || '')}"><datalist id="fnList">${pastNotes().map(n => `<option value="${esc(n)}">`).join('')}</datalist></div>
       <div data-for="exp"><label>Category <small class="muted" id="fcHint"></small></label><div class="chips catchips" id="fc">${CAT_NAMES.map(c => `<button type="button" class="chip" data-cat="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div></div>
       <div class="two"><div><label for="fdt" id="fdtL">Date</label><input id="fdt" type="date" value="${esc(dflt)}"></div>
         <div data-for="bill"><label for="fbN">Payments</label><select id="fbN">${NOPTS.map(n => `<option value="${n}">${n === 1 ? 'Once' : n + ' months'}</option>`).join('')}</select></div></div>
@@ -2543,6 +2603,8 @@ document.addEventListener('click', e => {
     case 'go-view': showView(d.v); render(); return;
     case 'goal-new': return goalNew();
     case 'report': return reportSheet(d.r);
+    case 'search': return searchSheet();
+    case 'sr-f': srch.f = d.k; document.querySelectorAll('[data-act=sr-f]').forEach(b => b.setAttribute('aria-pressed', b.dataset.k === d.k)); return runSearch();
     case 'rep-months': repState.months = +d.n; return reportSheet('trend');
     case 'cal-mv': { const c = repState.cal; const nd = new Date(c.y, c.i + +d.d, 1); repState.cal = {y: nd.getFullYear(), i: nd.getMonth()}; return reportSheet('cal'); }
     case 'goal-open': return goalSheet(d.g, false);
