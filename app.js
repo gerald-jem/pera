@@ -1350,6 +1350,7 @@ const AI_MS = 60000;
 let aiOk = store.get('pera:aiOk');   // null = unknown, true = worked before, false = not set up
 const SPARK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
 function aiError(msg, status) {
+  if (/overloaded|unavailable|503/i.test(msg)) return 'Gemini is busy right now (Google’s servers are overloaded). Tap Try again in a moment.';
   if (/exhausted|quota|rate limit|429/i.test(msg)) return 'Gemini’s free limit is used up for now. Try again in a minute, or tomorrow if it’s the daily limit.';
   if (status === 404 || /requested function was not found|function not found/i.test(msg)) { aiOk = false; store.set('pera:aiOk', false); return 'Pera AI isn’t set up yet. See Settings → Pera AI.'; }
   return msg;

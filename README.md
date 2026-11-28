@@ -27,4 +27,4 @@ Ask Pera, Sort my spending, monthly summaries and Add by talking use **Google Ge
 3. **Deploy the function** — *Edge Functions* → *Deploy a new function* → *Via Editor* → name it **`pera-ai`** → replace the sample code with [`supabase/functions/pera-ai/index.ts`](supabase/functions/pera-ai/index.ts) → *Deploy*. Leave **Verify JWT** on.
 4. In Pera: *Settings* → *Pera AI* → **Check Pera AI**. It should say “Pera AI is working.”
 
-Optional secret `GEMINI_MODEL` picks the model(s), tried in order (default `gemini-3.8-flash,gemini-3.5-flash-lite`).
+Optional secret `GEMINI_MODEL` picks the model(s), tried in order (default `gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite`). If Gemini often says it's busy, put the less crowded models first..

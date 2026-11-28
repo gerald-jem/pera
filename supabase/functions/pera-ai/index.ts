@@ -2,7 +2,7 @@
 // Secrets (Supabase → Edge Functions → Secrets):
 //   GEMINI_API_KEY   your key from Google AI Studio            (required)
 //   ALLOWED_EMAILS   your sign-in email, comma-separated list  (recommended: nobody else can use your quota)
-//   GEMINI_MODEL     optional, e.g. "gemini-3.8-flash,gemini-3.5-flash-lite" (tried in order)
+//   GEMINI_MODEL     optional, models tried in order (default: gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite)
 // Keep "Verify JWT" ON: Supabase then checks the caller is signed in before this code runs.
 
 const CORS = {
@@ -10,7 +10,7 @@ const CORS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
-const MODELS = (Deno.env.get('GEMINI_MODEL') || 'gemini-3.8-flash,gemini-3.5-flash-lite').split(',').map(s => s.trim()).filter(Boolean);
+const MODELS = (Deno.env.get('GEMINI_MODEL') || 'gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite').split(',').map(s => s.trim()).filter(Boolean);
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status, headers: {...CORS, 'Content-Type': 'application/json'}});
 
 // The platform already verified this token; we only read who is calling.
@@ -54,6 +54,7 @@ Deno.serve(async (req) => {
   // an older model that doesn't know thinkingLevel: drop it and ask again
   const send = async (model: string, stream: boolean) => {
     let r = await call(model, stream);
+    if (r.status === 503) { await new Promise(res => setTimeout(res, 800)); r = await call(model, stream); }   // busy: one quick retry
     if (r.status === 400) {
       const t = await r.clone().text();
       if (/thinking/i.test(t)) { delete (payload.generationConfig as Record<string, unknown>).thinkingConfig; r = await call(model, stream); }

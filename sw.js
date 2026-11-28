@@ -1,10 +1,10 @@
 // Pera service worker: network first, cache as the offline fallback.
 // Bump VERSION whenever app files change.
-const VERSION = 'pera-v54';
+const VERSION = 'pera-v55';
 // big files that rarely change (screenshot + PDF readers, fonts, Supabase): kept across app updates.
 // Bump VENDOR only when something in vendor/ changes.
 const VENDOR = 'pera-vendor-1';
-const SHELL = ['./', 'index.html', 'style.css?v=54', 'app.js?v=54', 'config.js?v=54',
+const SHELL = ['./', 'index.html', 'style.css?v=55', 'app.js?v=55', 'config.js?v=55',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
