@@ -533,3 +533,5 @@ main.app{display:block}header.top{display:flex}
 .hit .xh{opacity:0;transition:opacity .12s}.hit.on .xh,.hit:hover .xh{opacity:1}
 
 .pbar>b.savpart{border-radius:0 6px 6px 0;background:var(--s3,#2a9d8f);box-shadow:-2px 0 0 var(--card)}.savtxt{color:var(--s3,#2a9d8f)}
+
+.potshot{display:flex;justify-content:center;align-items:center;margin-top:8px}.implist li.dupe .t{opacity:.6}

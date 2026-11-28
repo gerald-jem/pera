@@ -739,11 +739,11 @@ function mp2Calc(pot) {
       sumBal += c + (pot.payout === 'annual' ? 0 : credited);
     }
     contribY = deps.filter(d => d.date.startsWith(String(y)) && d.date <= maturity).reduce((s, d) => s + d.a, 0);
-    const rate = (pot.rates && pot.rates[y] != null) ? pot.rates[y] : pot.rate, div = rate * sumBal / 12;
+    const rate = (pot.rates && pot.rates[y] != null) ? pot.rates[y] : pot.rate, real = pot.divActual && pot.divActual[y] != null, div = real ? +pot.divActual[y] : rate * sumBal / 12;
     const creditDate = String(y) === maturity.slice(0, 4) ? maturity : `${y}-12-31`;
     if (pot.payout === 'annual') paidOut += div; else credited += div;
     if (creditDate <= t) divNow += div;
-    years.push({y, contrib: contribY, rate, div, end: deps.filter(d => d.date <= `${y}-12-31` && d.date <= maturity).reduce((s, d) => s + d.a, 0) + (pot.payout === 'annual' ? 0 : credited), est: creditDate > t});
+    years.push({y, contrib: contribY, rate, div, real, end: deps.filter(d => d.date <= `${y}-12-31` && d.date <= maturity).reduce((s, d) => s + d.a, 0) + (pot.payout === 'annual' ? 0 : credited), est: creditDate > t});
   }
   const contrib = deps.filter(d => d.date <= maturity).reduce((s, d) => s + d.a, 0), contribNow = deps.filter(d => d.date <= t).reduce((s, d) => s + d.a, 0);
   return {years, contrib, contribNow, divs: credited + paidOut, now: contribNow + (pot.payout === 'annual' ? 0 : divNow), maturity, atMaturity: contrib + credited, paidOut, start};
@@ -934,7 +934,8 @@ function potHTML(p, k, editing, cedit, fedit, frate) {
   const delBtn = (cyc, d) => `<button class="x" data-act="dep-del" data-p="${esc(p.id)}" data-c="${cyc}" data-id="${esc(d.id)}" aria-label="Delete deposit">×</button>`;
   const addForm = (label, extra = '') => `<form id="depForm" class="depform" novalidate>
       <div class="two"><div><label for="depDate">Date</label><input id="depDate" type="date" value="${todayIso()}"></div><div><label for="depAmt">${label}</label><input id="depAmt" inputmode="decimal" placeholder="₱0" class="amtin" style="font-size:20px"></div></div>${extra}
-      <button class="go" type="submit">Add</button></form>`;
+      <button class="go" type="submit">Add</button></form>
+      <label class="ghost filebtn shotbtn potshot">${SHOT_IC}Add from screenshots<input type="file" id="potShot" accept="image/*" multiple></label><p class="muted" id="potShotMsg" aria-live="polite"></p>`;
   if (p.kind === 'td') {
     const cs = p.cycles || [];
     const binHtml = (p.trash || []).length ? `<h2>Deleted cycles</h2><ul class="list deplist">${p.trash.map((x, i) => { const cc = tdCycle(p, x.cycle), left = Math.max(0, Math.ceil((Date.parse(x.at) + TRASH_DAYS * 864e5 - Date.now()) / 864e5)); return `<li><span class="t">${esc(fmtDate(x.cycle.start))} – ${esc(fmtDate(cc.end))}<small>${esc(peso(cc.closing))} at maturity · ${left} day${left === 1 ? '' : 's'} left</small></span><button class="ghost" data-act="cyc-restore" data-p="${esc(p.id)}" data-k="${i}">Restore</button><button class="x" data-act="cyc-forever" data-p="${esc(p.id)}" data-k="${i}" aria-label="Delete for good">×</button></li>`; }).join('')}</ul>` : '';
@@ -1010,6 +1011,8 @@ function bindPot(p) {
       toast('Deposit updated', () => { d.date = old.date; d.a = old.a; commit('meta'); });
     });
   }
+  const ps = $('potShot');
+  if (ps) ps.addEventListener('change', e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) readPotShots(p, f); });
   const f = $('depForm'); if (!f) return;
   f.addEventListener('submit', e => {
     e.preventDefault();
@@ -2861,6 +2864,101 @@ function guessBillName(text, rows) {
   (S.meta.bills || []).forEach(b => { if (b.due && new Date(dnum(b.due)).getDate() === day) by[b.name] = (by[b.name] || 0) + (b.due > rows[0].due.slice(0, 4) - 1 + '' ? 2 : 1); });
   return Object.entries(by).sort((p, q) => q[1] - p[1]).map(x => x[0])[0] || '';
 }
+/* ---- savings from screenshots: Pag-IBIG MP2 contribution history, bank savings history ---- */
+const SHOT_IC = '<svg viewBox="0 0 24 24" aria-hidden="true" width="18" height="18" style="vertical-align:-3px;margin-right:6px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round"><rect x="3" y="6" width="18" height="14" rx="3"/><circle cx="12" cy="13" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/></svg>';
+function shotSavings(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean), rows = [], totals = {};
+  const lastDay = (y, m) => new Date(y, m + 1, 0).getDate();
+  lines.forEach((l, k) => {
+    // summary fields ("Total Savings  PHP 14,124.60"), value on the same line or the next
+    const tot = /total\s+(savings|dividends?|contributions?)/i.exec(l);
+    if (tot) { const v = shotAmts(l).pop() ?? (lines[k + 1] ? shotAmts(lines[k + 1]).pop() : undefined); if (v != null) totals[tot[1].toLowerCase().replace(/s$/, '').replace('dividend', 'div').replace('contribution', 'contrib')] = v; return; }
+    if (SKIP_AMT.test(l)) return;
+    let amts = shotAmts(l), cutAmt = false;
+    // amount cut off at the right edge ("1000." / "124.") — the last token, not a date, period or long reference
+    if (!amts.length) { const m = /(?:^|\s)(\d{1,3}(?:,\d{3})+|\d{1,7})\.\d?\s*\S?$/.exec(l); if (m) { amts = [parseFloat(m[1].replace(/,/g, ''))]; cutAmt = true; } }
+    if (!amts.length) return;
+    const a = amts[amts.length - 1];
+    // a date: full m/d/yyyy (or a word date), or one cut off at the left edge ("/04/2026")
+    let date = shotDate(l), approx = false;
+    const per = /(?<![\/\d])(0?[1-9]|1[0-2])\/(20\d{2})(?![\/\d])/.exec(l);   // MP2 "period covered" 08/2026
+    if (!date) { const cut = /^\S*?\/(\d{1,2})\/(20\d{2})\b/.exec(l);
+      if (cut && per) { const y = +per[2], m = +per[1] - 1; date = iso(mkDate(y, m, Math.min(+cut[1], lastDay(y, m)))); approx = true; }
+      else if (per) { date = iso(mkDate(+per[2], +per[1] - 1, 1)); approx = true; }
+      else if (cut) { date = `${cut[2]}-12-31`; approx = true; } }
+    if (/\bDIV\b|dividend/i.test(l)) { const y = date ? +date.slice(0, 4) : (/(20\d{2})/.exec(l) || [])[1]; if (y && a > 0) rows.push({kind: 'div', year: +y, a, cutAmt, date: date || `${y}-12-31`}); return; }
+    if (!date) return;
+    const ref = (/\b(\d{10,})\b/.exec(l.replace(/\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2}/g, '')) || [])[1] || '';
+    const out = /withdraw|debit|transfer(?:red)? out|sent|-\s*[₱P]?\s*\d/i.test(l) || amts[amts.length - 1] < 0;
+    rows.push({kind: 'dep', date, a: out ? -Math.abs(a) : Math.abs(a), ref, approx, cutAmt, period: per ? `${per[2]}-${String(+per[1]).padStart(2, '0')}` : ''});
+  });
+  // a cut-off dividend ("124.") gets its centavos from "Total Dividends" when that starts the same
+  const divs = rows.filter(r => r.kind === 'div');
+  if (totals.div != null && divs.length === 1 && Math.floor(totals.div) === Math.floor(divs[0].a)) { divs[0].a = totals.div; divs[0].cutAmt = false; }
+  return {rows, totals};
+}
+async function readPotShots(p, files) {
+  const msg = $('potShotMsg'), say = t => { if (msg) msg.textContent = t; };
+  try {
+    say('Reading screenshot… 0%');
+    const texts = await ocrImages(files, pct => say(`Reading screenshot${files.length > 1 ? 's' : ''}… ${pct}%`));
+    const all = texts.map(shotSavings), rows = all.flatMap(x => x.rows), totals = Object.assign({}, ...all.map(x => x.totals));
+    rows.filter(r => r.kind === 'div' && r.cutAmt && totals.div != null && Math.floor(totals.div) === Math.floor(r.a)).forEach(r => { r.a = totals.div; r.cutAmt = false; });
+    if (!rows.length) { say('Couldn’t find contributions with amounts and dates. Make sure the dates and amounts are visible, or add them above.'); return; }
+    say(''); potShotReview(p, rows, totals);
+  } catch (e) { say(e.message || 'Couldn’t read this screenshot.'); }
+}
+let potShot = null;
+function potDeps(p) { return p.kind === 'td' ? (p.cycles || []).flatMap(c => c.deposits || []) : p.kind === 'mp2' ? (p.deposits || []) : (p.txns || []); }
+function potShotReview(p, rows, totals) {
+  const have = potDeps(p), best = new Map();
+  // the same line in two screenshots: keep the clearest copy (full date and amount)
+  // (one Pag-IBIG reference can cover two months, so the month it covers is part of the key)
+  rows.forEach(r => { const k = r.kind === 'div' ? 'div' + r.year : r.period ? 'p' + r.period + '|' + Math.round(r.a) : (r.ref || r.date) + '|' + r.date + '|' + Math.round(r.a);
+    const cur = best.get(k); if (!cur) return best.set(k, {...r});
+    if (cur.approx && !r.approx) { cur.date = r.date; cur.approx = false; }   // full date from one copy…
+    if (cur.cutAmt && !r.cutAmt) { cur.a = r.a; cur.cutAmt = false; }        // …full amount from the other
+    if (!cur.ref && r.ref) cur.ref = r.ref; });
+  const list = [...best.values()]
+    .filter(r => r.kind === 'dep' || p.kind === 'mp2')
+    .map(r => {
+      if (r.kind === 'div') { const cur = p.divActual && p.divActual[r.year]; return {...r, dup: cur != null && Math.abs(cur - r.a) < 0.01, on: !(cur != null && Math.abs(cur - r.a) < 0.01)}; }
+      // already there: same reference, or same amount in the same month (MP2: the month it covers)
+      const ym = (r.period || r.date).slice(0, 7);
+      const dup = have.some(d => (r.ref && d.ref === r.ref && (d.period || '') === (r.period || '')) || (Math.abs(d.a - r.a) < 0.01 && (d.period || d.date).slice(0, 7) === ym));
+      return {...r, dup, on: !dup};
+    }).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  potShot = {p, rows: list, totals};
+  openSheet(`<div class="sheethead"><h2>From screenshot</h2><button type="button" class="ghost" data-act="pshot-back">Cancel</button></div><div id="psBody"></div>`);
+  renderPotShot();
+}
+function renderPotShot() {
+  const box = $('psBody'); if (!box || !potShot) return;
+  const {p, rows, totals} = potShot, on = rows.filter(r => r.on), add = on.filter(r => r.kind === 'dep').reduce((s, r) => s + r.a, 0);
+  const now = potNow(p), after = p.kind === 'mp2' ? null : now + add;
+  const stmt = totals.saving, dups = rows.filter(r => r.dup).length, approx = rows.some(r => r.approx && r.on);
+  box.innerHTML = `<p class="muted">Found ${rows.length} line${rows.length === 1 ? '' : 's'} for <b>${esc(p.name)}</b>${dups ? ` · ${dups} already added, left unticked` : ''}. Untick anything that’s wrong.</p>
+    <ul class="list implist">${rows.map((r, k) => `<li class="${r.dup ? 'dupe' : ''}"><button class="chk ${r.on ? 'on' : ''}" data-act="pshot-tog" data-k="${k}" aria-label="${r.on ? 'Skip' : 'Add'} this line"><span>${r.on ? '✓' : ''}</span></button>
+      <span class="t">${r.kind === 'div' ? `Dividend ${r.year}<small>Actual dividend credited${p.divActual && p.divActual[r.year] != null && !r.dup ? ' · replaces the one you set' : ' · replaces Pera’s estimate'}${r.dup ? ' · already added' : ''}</small>`
+        : `${esc(fmtDate(r.date))}${r.approx ? ' <span class="muted">≈</span>' : ''}<small>${r.period ? `For ${esc(new Date(+r.period.slice(0, 4), +r.period.slice(5) - 1).toLocaleDateString('en-PH', {month: 'short', year: 'numeric'}))}` : r.a < 0 ? 'Withdrawal' : 'Deposit'}${r.ref ? ` · ref …${esc(r.ref.slice(-6))}` : ''}${r.cutAmt ? ' · amount cut off, check it' : ''}${r.dup ? ' · already added' : ''}</small>`}</span>
+      <b class="amt ${r.kind === 'div' || r.a > 0 ? 'up' : ''}">${r.a < 0 ? '−' : '+'}${esc(peso(Math.abs(r.a), 2))}</b></li>`).join('')}</ul>
+    ${approx ? '<p class="muted">≈ The date was cut off in the screenshot, so Pera used the month it covers. Tap the contribution later to fix the day if it matters.</p>' : ''}
+    ${stmt != null ? `<p class="stalenote">Statement says total savings <b>${esc(peso(stmt, 2))}</b>. ${p.kind === 'mp2' ? 'Pera will compare after adding.' : `Pera will show <b>${esc(peso(after, 2))}</b>${Math.abs(after - stmt) < 1 ? ' ✓' : ''}.`}</p>` : ''}
+    <button class="go" data-act="pshot-go" ${on.length ? '' : 'disabled'}>${on.length ? `Add ${on.length} line${on.length === 1 ? '' : 's'}` : 'Nothing to add'}</button>`;
+}
+function applyPotShot() {
+  const {p, rows, totals} = potShot, pick = rows.filter(r => r.on); if (!pick.length) return;
+  const undos = [], oldDiv = p.divActual ? {...p.divActual} : undefined;
+  for (const r of pick) {
+    if (r.kind === 'div') { p.divActual = {...(p.divActual || {}), [r.year]: r.a}; continue; }
+    const before = potDeps(p).length; undos.push(addDeposit(p, r.date, r.a));
+    const it = potDeps(p).find(d => d.date === r.date && d.a === r.a && !d.ref && !d.period); if (it) { if (r.ref) it.ref = r.ref; if (r.period) it.period = r.period; }
+  }
+  commit('meta'); potShot = null;
+  const now = potNow(p), stmt = totals.saving, check = stmt != null ? (Math.abs(now - stmt) < 1 ? ' · matches the statement ✓' : ` · Pera shows ${peso(now, 2)}, statement ${peso(stmt, 2)}`) : '';
+  potSheet(p.id);
+  toast(`${pick.length} line${pick.length === 1 ? '' : 's'} added to ${p.name}${check}`, () => { undos.reverse().forEach(u => u()); if (oldDiv === undefined) delete p.divActual; else p.divActual = oldDiv; commit('meta'); potSheet(p.id); });
+}
 async function readShots(files, fail, busy) {
   try {
     busy('Reading screenshot… 0%');
@@ -3102,6 +3200,9 @@ document.addEventListener('click', e => {
     case 'search': return searchSheet();
     case 'ask': return askSheet();
     case 'ask-q': return askPera(d.q);
+    case 'pshot-tog': { const r = potShot && potShot.rows[+d.k]; if (r) { r.on = !r.on; renderPotShot(); } return; }
+    case 'pshot-go': return applyPotShot();
+    case 'pshot-back': { const p = potShot && potShot.p; potShot = null; return p ? potSheet(p.id) : closeSheet(); }
     case 'ask-goal': return goalNew(+d.a);
     case 'ask-fresh': { const m = chat[chat.length - 1]; if (m && m.cached) chat.pop(); const last = [...chat].reverse().find(x => x.role === 'user'); if (last) askPera(last.text, true, true); return; }
     case 'ask-retry': { const last = [...chat].reverse().find(m => m.role === 'user'); if (chat.length && chat[chat.length - 1].err) chat.pop(); if (last) askPera(last.text, true); return; }
